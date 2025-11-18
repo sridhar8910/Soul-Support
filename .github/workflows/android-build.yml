@@ -1,0 +1,248 @@
+name: Android CI - Build APK
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'apps/**'
+      - 'packages/common/**'
+      - '.github/workflows/android-build.yml'
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - 'apps/**'
+      - 'packages/common/**'
+  workflow_dispatch:
+    inputs:
+      build_counsellor:
+        description: 'Build Counsellor App'
+        type: boolean
+        default: true
+      build_user:
+        description: 'Build User App'
+        type: boolean
+        default: true
+      build_type:
+        description: 'Build Type'
+        type: choice
+        options:
+          - debug
+          - release
+        default: release
+
+env:
+  FLUTTER_CHANNEL: stable
+  JAVA_VERSION: '11'
+  ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+  GRADLE_VERSION: '8.11.1'
+  NDK_VERSION: '27.0.12077973'
+
+jobs:
+  build-counsellor:
+    name: Build Counsellor App
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.build_counsellor == 'true' ||
+      github.event_name != 'workflow_dispatch' && (contains(github.event.head_commit.message, '[counsellor]') || !contains(github.event.head_commit.message, '[user]'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Gradle and pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.pub-cache
+            apps/app_counsellor/.dart_tool
+            packages/common/.dart_tool
+          key: ${{ runner.os }}-counsellor-gradle-${{ hashFiles('apps/app_counsellor/android/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('apps/app_counsellor/pubspec.yaml', 'packages/common/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-counsellor-gradle-
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Install Android commandline tools
+        run: |
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          cd $ANDROID_SDK_ROOT/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline.zip
+          unzip -q cmdline.zip
+          mv cmdline-tools latest
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses || true
+
+      - name: Install Android SDK platforms, build-tools and NDK ${{ env.NDK_VERSION }}
+        run: |
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;${{ env.NDK_VERSION }}" \
+            --install
+
+      - name: Add Android tools to PATH
+        run: |
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Install Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get Flutter packages (common)
+        working-directory: ./packages/common
+        run: flutter pub get
+
+      - name: Get Flutter packages (counsellor)
+        working-directory: ./apps/app_counsellor
+        run: flutter pub get
+
+      - name: Analyze code
+        working-directory: ./apps/app_counsellor
+        run: flutter analyze
+
+      - name: Build ${{ github.event.inputs.build_type || 'release' }} APK
+        working-directory: ./apps/app_counsellor
+        run: |
+          if [ "${{ github.event.inputs.build_type || 'release' }}" == "debug" ]; then
+            flutter build apk --debug --no-shrink
+          else
+            flutter build apk --release
+          fi
+
+      - name: Build ${{ github.event.inputs.build_type || 'release' }} App Bundle
+        if: github.event.inputs.build_type != 'debug'
+        working-directory: ./apps/app_counsellor
+        run: flutter build appbundle --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: counsellor-${{ github.event.inputs.build_type || 'release' }}-apk
+          path: apps/app_counsellor/build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
+
+      - name: Upload AAB artifact
+        if: github.event.inputs.build_type != 'debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: counsellor-release-aab
+          path: apps/app_counsellor/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+  build-user:
+    name: Build User App
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.build_user == 'true' ||
+      github.event_name != 'workflow_dispatch' && (contains(github.event.head_commit.message, '[user]') || !contains(github.event.head_commit.message, '[counsellor]'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Gradle and pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.pub-cache
+            apps/app_user/.dart_tool
+            packages/common/.dart_tool
+          key: ${{ runner.os }}-user-gradle-${{ hashFiles('apps/app_user/android/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('apps/app_user/pubspec.yaml', 'packages/common/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-user-gradle-
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Install Android commandline tools
+        run: |
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          cd $ANDROID_SDK_ROOT/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline.zip
+          unzip -q cmdline.zip
+          mv cmdline-tools latest
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses || true
+
+      - name: Install Android SDK platforms, build-tools and NDK ${{ env.NDK_VERSION }}
+        run: |
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;${{ env.NDK_VERSION }}" \
+            --install
+
+      - name: Add Android tools to PATH
+        run: |
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Install Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get Flutter packages (common)
+        working-directory: ./packages/common
+        run: flutter pub get
+
+      - name: Get Flutter packages (user)
+        working-directory: ./apps/app_user
+        run: flutter pub get
+
+      - name: Analyze code
+        working-directory: ./apps/app_user
+        run: flutter analyze
+
+      - name: Build ${{ github.event.inputs.build_type || 'release' }} APK
+        working-directory: ./apps/app_user
+        run: |
+          if [ "${{ github.event.inputs.build_type || 'release' }}" == "debug" ]; then
+            flutter build apk --debug --no-shrink
+          else
+            flutter build apk --release
+          fi
+
+      - name: Build ${{ github.event.inputs.build_type || 'release' }} App Bundle
+        if: github.event.inputs.build_type != 'debug'
+        working-directory: ./apps/app_user
+        run: flutter build appbundle --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: user-${{ github.event.inputs.build_type || 'release' }}-apk
+          path: apps/app_user/build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
+
+      - name: Upload AAB artifact
+        if: github.event.inputs.build_type != 'debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: user-release-aab
+          path: apps/app_user/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+

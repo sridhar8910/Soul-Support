@@ -1,0 +1,157 @@
+# Runs the Django backend and Flutter Counsellor App together.
+# Usage: .\run_counsellor.ps1 [-Release] [-Device <device>]
+
+param(
+    [switch]$Release,
+    [ValidateSet('windows', 'chrome', 'edge', 'web-server', 'android')]
+    [string]$Device = 'chrome'
+)
+
+$ErrorActionPreference = 'Stop'
+
+# Determine project root relative to this script
+$projectRoot = $PSScriptRoot
+$backendPath = Join-Path $projectRoot 'backend'
+$flutterPath = Join-Path $projectRoot 'apps\app_counsellor'
+$pythonExe = Join-Path $projectRoot '.venv\Scripts\python.exe'
+if (!(Test-Path $pythonExe)) {
+    $fallbackPythonExe = Join-Path $backendPath 'venv\Scripts\python.exe'
+    if (Test-Path $fallbackPythonExe) {
+        $pythonExe = $fallbackPythonExe
+    }
+}
+
+if (!(Test-Path $pythonExe)) {
+    Write-Error "Python virtualenv not found. Expected at $projectRoot\.venv or $backendPath\venv."
+    Write-Host "Please create a virtual environment first:" -ForegroundColor Yellow
+    Write-Host "  cd backend" -ForegroundColor Yellow
+    Write-Host "  python -m venv venv" -ForegroundColor Yellow
+    Write-Host "  .\venv\Scripts\activate" -ForegroundColor Yellow
+    Write-Host "  pip install -r requirements.txt" -ForegroundColor Yellow
+    exit 1
+}
+
+if (!(Test-Path (Join-Path $flutterPath 'pubspec.yaml'))) {
+    Write-Error "Flutter project (pubspec.yaml) not found at $flutterPath."
+    exit 1
+}
+
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Starting Django Backend + Counsellor App" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Backend API: http://127.0.0.1:8000/api" -ForegroundColor Green
+Write-Host "Device: $Device" -ForegroundColor Green
+Write-Host "Mode: $(if ($Release) { 'Release' } else { 'Debug' })" -ForegroundColor Green
+Write-Host ""
+
+Write-Host "[1/2] Starting Django backend..." -ForegroundColor Cyan
+Write-Host "Backend will run in a separate window to show logs." -ForegroundColor Yellow
+Write-Host ""
+
+# Create a temporary script to run the backend with visible output
+$backendScript = @"
+Write-Host '========================================' -ForegroundColor Cyan
+Write-Host 'Django Backend Server' -ForegroundColor Cyan
+Write-Host '========================================' -ForegroundColor Cyan
+Write-Host 'API: http://127.0.0.1:8000/api' -ForegroundColor Green
+Write-Host 'Press Ctrl+C to stop the server' -ForegroundColor Yellow
+Write-Host ''
+Set-Location '$backendPath'
+& '$pythonExe' manage.py runserver 127.0.0.1:8000
+Write-Host ''
+Write-Host 'Backend server stopped.' -ForegroundColor Yellow
+Write-Host 'Press any key to close this window...' -ForegroundColor Gray
+`$null = `$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+"@
+
+$backendScriptPath = Join-Path $env:TEMP "backend_$(Get-Date -Format 'yyyyMMdd_HHmmss').ps1"
+$backendScript | Out-File -FilePath $backendScriptPath -Encoding UTF8
+
+# Start backend in a new window
+$backendProcess = Start-Process powershell.exe -ArgumentList "-NoExit", "-File", "`"$backendScriptPath`"" -PassThru
+
+Write-Host "Backend started in separate window (PID: $($backendProcess.Id))" -ForegroundColor Green
+Start-Sleep -Seconds 3
+Write-Host ""
+
+if ($Device -eq 'windows') {
+    Write-Host "Ensuring no stale Flutter desktop processes..." -ForegroundColor Cyan
+    Get-Process -Name 'app_counsellor' -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $_.Kill()
+            $_.WaitForExit()
+        }
+        catch {
+            Write-Warning "Failed to terminate process $($_.Name): $_"
+        }
+    }
+
+    $generatedPluginFile = Join-Path $flutterPath 'windows\flutter\generated_plugin_registrant.h'
+    if (Test-Path $generatedPluginFile) {
+        try {
+            Remove-Item $generatedPluginFile -Force
+        }
+        catch {
+            Write-Warning "Could not remove locked file $generatedPluginFile. Continuing..."
+        }
+    }
+}
+
+Write-Host "[2/2] Launching Flutter Counsellor App..." -ForegroundColor Cyan
+Write-Host ""
+
+Push-Location $flutterPath
+try {
+    $flutterArgs = @('run', '-d', $Device)
+    if ($Release) {
+        $flutterArgs += '--release'
+    }
+    
+    Write-Host "Backend is running in a separate window - check that window for backend logs." -ForegroundColor Cyan
+    Write-Host "Starting Flutter app (logs will appear below)...`n" -ForegroundColor Cyan
+    Write-Host "----------------------------------------" -ForegroundColor DarkGray
+    Write-Host ""
+    
+    # Run Flutter in foreground - this will show all Flutter logs in the terminal
+    flutter @flutterArgs
+    
+    Write-Host ""
+    Write-Host "----------------------------------------" -ForegroundColor DarkGray
+    Write-Host "`nFlutter exited." -ForegroundColor Yellow
+}
+catch {
+    Write-Host "`nError: $_" -ForegroundColor Red
+}
+finally {
+    Pop-Location
+    Write-Host "`nStopping Django backend..." -ForegroundColor Yellow
+    
+    # Stop backend process (this will close the window)
+    if ($backendProcess -and -not $backendProcess.HasExited) {
+        try {
+            # Try to close gracefully first
+            $backendProcess.CloseMainWindow() | Out-Null
+            Start-Sleep -Seconds 1
+            if (-not $backendProcess.HasExited) {
+                $backendProcess.Kill()
+                $backendProcess.WaitForExit(5000)
+            }
+        }
+        catch {
+            Write-Warning "Error stopping backend process: $_"
+        }
+    }
+    
+    # Clean up temp script
+    if (Test-Path $backendScriptPath) {
+        try {
+            Remove-Item $backendScriptPath -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Ignore cleanup errors
+        }
+    }
+}
+
+Write-Host "All processes stopped." -ForegroundColor Green
+
