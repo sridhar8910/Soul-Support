@@ -248,18 +248,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
 
-    final username = _usernameCtrl.text.trim();
+    String username = _usernameCtrl.text.trim();
     final fullNameParts = [
       _firstCtrl.text.trim(),
       if (_middleCtrl.text.trim().isNotEmpty) _middleCtrl.text.trim(),
       _lastCtrl.text.trim(),
     ].where((s) => s.isNotEmpty).toList();
     final fullName = fullNameParts.join(' ');
-    final nicknameFallback = _nicknameCtrl.text.trim().isNotEmpty ? _nicknameCtrl.text.trim() : username;
     final age = int.tryParse(_ageCtrl.text.trim());
     final email = _emailCtrl.text.trim();
     final gender = _selectedGender;
     final phone = _fullPhone.isEmpty ? _phoneCtrl.text.trim() : _fullPhone;
+
+    // If username was not provided, derive a safe fallback from nickname or email
+    if (username.isEmpty) {
+      final nickname = _nicknameCtrl.text.trim();
+      if (nickname.isNotEmpty) {
+        username = nickname.replaceAll(RegExp(r'\s+'), '_');
+      } else if (email.isNotEmpty && email.contains('@')) {
+        username = email.split('@').first.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '');
+      } else {
+        username = 'user${DateTime.now().millisecondsSinceEpoch.remainder(100000)}';
+      }
+      if (username.length < 3) username = '${username}_123';
+    }
+
+    final nicknameFallback = _nicknameCtrl.text.trim().isNotEmpty ? _nicknameCtrl.text.trim() : username;
 
     setState(() => _registering = true);
     final (ok, err) = await _api.register(
@@ -310,14 +324,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         key: _basicFormKey,
         child: Column(
           children: [
-            TextFormField(
-              controller: _usernameCtrl,
-              textInputAction: TextInputAction.next,
-              decoration: _fieldDecoration(
-                  label: 'Username', prefix: Icons.account_circle_outlined),
-              validator: _validateUsername,
-            ),
-            const SizedBox(height: 12),
+            // Username field removed from UI. A fallback username will be
+            // generated on submit if the user doesn't provide one.
+            const SizedBox(height: 0),
             TextFormField(
               controller: _nicknameCtrl,
               textInputAction: TextInputAction.next,
