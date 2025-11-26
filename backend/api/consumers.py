@@ -1,8 +1,13 @@
 """
 WebSocket consumers for real-time chat functionality.
 """
+# type: ignore
+# pyright: reportAttributeAccessIssue=false,reportIncompatibleMethodOverride=false
+# pylint: disable=no-member,broad-except,signature-differs,arguments-differ
 import json
 import logging
+from typing import Any, Dict, Optional, Tuple
+
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import User
@@ -14,20 +19,27 @@ logger = logging.getLogger(__name__)
 class ChatConsumer(AsyncWebsocketConsumer):
     """WebSocket consumer for real-time chat messaging."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.chat = None  # Cache chat object to avoid repeated queries
+        self.chat: Optional[Chat] = None  # Cache chat object to avoid repeated queries
+        self.chat_id: str = ""  # Set in connect()
+        self.room_group_name: str = ""  # Set in connect()
+        self.user: Any = None  # Set in connect() - Django User or AnonymousUser
+        self._cached_is_user_sender: bool = False  # Set in connect()
 
-    async def connect(self):
+    async def connect(self) -> None:
         """Handle WebSocket connection."""
-        self.chat_id = self.scope["url_route"]["kwargs"]["chat_id"]
+        url_route = self.scope.get("url_route", {})
+        kwargs = url_route.get("kwargs", {})
+        self.chat_id = str(kwargs.get("chat_id", ""))
         self.room_group_name = f"chat_{self.chat_id}"
         self.user = self.scope["user"]
         
         # Extract token from query string for debugging
         query_string = self.scope.get("query_string", b"").decode()
         token_present = "token=" in query_string
-        client_info = self.scope.get("client", ["unknown"])[0] if self.scope.get("client") else "unknown"
+        client = self.scope.get("client")
+        client_info = client[0] if client and isinstance(client, (list, tuple)) and len(client) > 0 else "unknown"
 
         logger.info("WS CONNECT attempt: chat_id=%s, user=%s, token_present=%s, remote=%s, channel=%s",
                     self.chat_id, self.user.username if self.user.is_authenticated else "anonymous",
@@ -68,8 +80,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         logger.info("WS CONNECT success: Joined group %s as channel %s (user=%s, is_user_sender=%s)",
                     self.room_group_name, self.channel_name, self.user.username, self._cached_is_user_sender)
 
-    async def disconnect(self, close_code):
-        """Handle WebSocket disconnection."""
+    async def disconnect(self, close_code: int) -> None:  # type: ignore[override,assignment]
+        """Handle WebSocket disconnection.
+        
+        Note: Parameter name is 'close_code' (newer API) but parent class uses 'code'.
+        This is intentional to match the current Channels API.
+        """
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
@@ -89,7 +105,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     self.user.username if hasattr(self, 'user') and self.user.is_authenticated else "unknown")
         self.chat = None  # Clear cache
 
-    async def receive(self, text_data):
+    async def receive(self, text_data: str) -> None:  # type: ignore[override]  # pylint: disable=arguments-differ
         """Handle message received from WebSocket."""
         logger.info("WS RECEIVE: chat_id=%s, channel=%s, user=%s, raw_text=%s",
                     self.chat_id, self.channel_name, self.user.username, text_data[:100])
@@ -111,7 +127,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             # Validate chat exists and user has access
             if not self.chat:
-                logger.warning(f"Chat cache lost for chat {self.chat_id}, reloading...")
+                logger.warning("Chat cache lost for chat %s, reloading...", self.chat_id)
                 chat_data = await self.get_chat_and_check_access(self.user, self.chat_id)
                 if not chat_data:
                     await self.send(text_data=json.dumps({
@@ -144,14 +160,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             except ValueError as e:
                 # Handle chat expiration error specifically
                 error_msg = str(e)
-                logger.warning(f"Chat {self.chat_id} expired: {error_msg}")
+                logger.warning("Chat %s expired: %s", self.chat_id, error_msg)
                 await self.send(text_data=json.dumps({
                     "error": error_msg,
                     "chat_expired": True
                 }))
                 return
-            except Exception as e:
-                logger.error(f"Failed to save message for chat {self.chat_id}: {e}", exc_info=True)
+            except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+                logger.error("Failed to save message for chat %s: %s", self.chat_id, e, exc_info=True)
                 await self.send(text_data=json.dumps({
                     "error": "Failed to save message. Please try again."
                 }))
@@ -167,14 +183,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     is_user_sender = await method(self.chat_id, self.user.id)
                 else:
                     # Method not available or not callable, use cached value
-                    logger.warning(f"is_user_sender method not callable for chat {self.chat_id}, using cached value")
+                    logger.warning("is_user_sender method not callable for chat %s, using cached value", self.chat_id)
                     is_user_sender = self._cached_is_user_sender if hasattr(self, '_cached_is_user_sender') else False
             except TypeError as e:
                 # This happens if is_user_sender is a boolean instead of a method (old code issue)
-                logger.warning(f"TypeError calling is_user_sender for chat {self.chat_id}: {e}. Using cached value.")
+                logger.warning("TypeError calling is_user_sender for chat %s: %s. Using cached value.", self.chat_id, e)
                 is_user_sender = self._cached_is_user_sender if hasattr(self, '_cached_is_user_sender') else False
-            except Exception as e:
-                logger.error(f"Failed to determine sender type for chat {self.chat_id}: {e}", exc_info=True)
+            except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+                logger.error("Failed to determine sender type for chat %s: %s", self.chat_id, e, exc_info=True)
                 # Fallback to cached value
                 is_user_sender = self._cached_is_user_sender if hasattr(self, '_cached_is_user_sender') else False
 
@@ -193,8 +209,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     }))
                     logger.info("WS ACK: Sent ACK for client_message_id=%s, message_id=%s", 
                                 client_message_id, message_obj.id)
-                except Exception as e:
-                    logger.error(f"Failed to send ACK for chat {self.chat_id}: {e}", exc_info=True)
+                except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+                    logger.error("Failed to send ACK for chat %s: %s", self.chat_id, e, exc_info=True)
             
             # Send message to room group (broadcast to all connected clients)
             try:
@@ -213,8 +229,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.channel_layer.group_send(self.room_group_name, payload)
                 logger.info("WS BROADCAST: Successfully sent to group %s (payload keys: %s)",
                             self.room_group_name, list(payload.keys()))
-            except Exception as e:
-                logger.error(f"Failed to broadcast message in chat {self.chat_id}: {e}", exc_info=True)
+            except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+                logger.error("Failed to broadcast message in chat %s: %s", self.chat_id, e, exc_info=True)
                 await self.send(text_data=json.dumps({
                     "error": "Failed to send message to other participants"
                 }))
@@ -242,21 +258,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             "WS BROADCAST: Chat status update sent to counselor_queue: chat_id=%s, status=active",
                             self.chat_id
                         )
-                except Exception as e:
-                    logger.error(f"Failed to broadcast chat status update for chat {self.chat_id}: {e}", exc_info=True)
+                except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+                    logger.error("Failed to broadcast chat status update for chat %s: %s", self.chat_id, e, exc_info=True)
                 
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in WebSocket message: {e}")
+            logger.error("Invalid JSON in WebSocket message: %s", e)
             await self.send(text_data=json.dumps({
                 "error": "Invalid message format"
             }))
-        except Exception as e:
-            logger.error(f"Error processing message in chat {self.chat_id}: {e}", exc_info=True)
+        except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+            logger.error("Error processing message in chat %s: %s", self.chat_id, e, exc_info=True)
             await self.send(text_data=json.dumps({
                 "error": f"Failed to process message: {str(e)}"
             }))
 
-    async def chat_message(self, event):
+    async def chat_message(self, event: Dict[str, Any]) -> None:
         """Send message to WebSocket."""
         # Log message delivery for debugging
         # Note: If same user has multiple connections (multiple tabs/windows), 
@@ -278,7 +294,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(payload))
         logger.debug("WS DELIVER: Sent payload to channel %s (user may have multiple connections)", self.channel_name)
     
-    async def chat_status_change(self, event):
+    async def chat_status_change(self, event: Dict[str, Any]) -> None:
         """Handler to deliver chat status updates to counselors."""
         # This will be received by counselor clients listening on counselor_queue
         payload = {
@@ -296,7 +312,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def get_chat_and_check_access(self, user, chat_id):
+    def get_chat_and_check_access(self, user: User, chat_id: str) -> Optional[Tuple[Chat, bool]]:
         """
         Get chat object and check access in a single query.
         Returns (chat, is_user_sender) tuple or None if no access.
@@ -305,13 +321,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
             chat = Chat.objects.select_related('user', 'counsellor').get(id=chat_id)
             
             # Log access check
+            counsellor_username = getattr(chat.counsellor, 'username', None) if chat.counsellor else None
+            counsellor_id = getattr(chat.counsellor, 'id', None) if chat.counsellor else None
             logger.info(
-                f"get_chat_and_check_access: chat_id={chat_id}, "
-                f"user={user.username} (id={user.id}), "
-                f"chat_user={chat.user.username} (id={chat.user.id}), "
-                f"chat_counsellor={chat.counsellor.username if chat.counsellor else None} "
-                f"(id={chat.counsellor_id if chat.counsellor else None}), "
-                f"chat_status={chat.status}"
+                "get_chat_and_check_access: chat_id=%s, user=%s (id=%s), "
+                "chat_user=%s (id=%s), chat_counsellor=%s (id=%s), chat_status=%s",
+                chat_id,
+                user.username,
+                user.id,
+                chat.user.username,
+                chat.user.id,
+                counsellor_username,
+                counsellor_id,
+                chat.status
             )
             
             # User can access if they are the chat user or the assigned counsellor
@@ -320,11 +342,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             has_access = is_chat_user or is_chat_counsellor
             
             if not has_access:
+                counsellor_username = getattr(chat.counsellor, 'username', None) if chat.counsellor else None
+                counsellor_id = getattr(chat.counsellor, 'id', None) if chat.counsellor else None
                 logger.warning(
-                    f"Access denied: user {user.username} (id={user.id}) not authorized for chat {chat_id}. "
-                    f"Chat user: {chat.user.username} (id={chat.user.id}), "
-                    f"Chat counsellor: {chat.counsellor.username if chat.counsellor else None} "
-                    f"(id={chat.counsellor_id if chat.counsellor else None})"
+                    "Access denied: user %s (id=%s) not authorized for chat %s. "
+                    "Chat user: %s (id=%s), Chat counsellor: %s (id=%s)",
+                    user.username,
+                    user.id,
+                    chat_id,
+                    chat.user.username,
+                    chat.user.id,
+                    counsellor_username,
+                    counsellor_id
                 )
                 return None
             
@@ -332,19 +361,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
             is_user_sender = is_chat_user
             
             logger.info(
-                f"Access granted: user {user.username} (id={user.id}) has access to chat {chat_id}. "
-                f"is_user_sender={is_user_sender}"
+                "Access granted: user %s (id=%s) has access to chat %s. is_user_sender=%s",
+                user.username,
+                user.id,
+                chat_id,
+                is_user_sender
             )
             return (chat, is_user_sender)
         except Chat.DoesNotExist:
-            logger.error(f"get_chat_and_check_access: Chat {chat_id} not found in database")
+            logger.error("get_chat_and_check_access: Chat %s not found in database", chat_id)
             return None
-        except Exception as e:
-            logger.error(f"get_chat_and_check_access: Error checking access for chat {chat_id}: {e}", exc_info=True)
+        except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+            logger.error("get_chat_and_check_access: Error checking access for chat %s: %s", chat_id, e, exc_info=True)
             return None
 
     @database_sync_to_async
-    def save_message(self, text, client_message_id=None):
+    def save_message(self, text: str, client_message_id: Optional[str] = None) -> Optional[Tuple[ChatMessage, bool]]:
         """Save message to database using atomic transaction with select_for_update.
         Automatically activates queued chats when user sends message.
         Returns (message_obj, chat_was_activated) tuple or None if duplicate."""
@@ -367,8 +399,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     
                     if existing:
                         logger.info(
-                            f"DUPLICATE MESSAGE DETECTED: client_message_id={client_message_id}, "
-                            f"existing_message_id={existing.id}, chat_id={self.chat_id}, sender={self.user.username}"
+                            "DUPLICATE MESSAGE DETECTED: client_message_id=%s, existing_message_id=%s, "
+                            "chat_id=%s, sender=%s",
+                            client_message_id,
+                            existing.id,
+                            self.chat_id,
+                            self.user.username
                         )
                         return None  # Return None to indicate duplicate
                 
@@ -383,8 +419,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     
                     if recent_duplicate:
                         logger.info(
-                            f"DUPLICATE MESSAGE DETECTED (fallback): same text within 2s, "
-                            f"existing_message_id={recent_duplicate.id}, chat_id={self.chat_id}, sender={self.user.username}"
+                            "DUPLICATE MESSAGE DETECTED (fallback): same text within 2s, "
+                            "existing_message_id=%s, chat_id=%s, sender=%s",
+                            recent_duplicate.id,
+                            self.chat_id,
+                            self.user.username
                         )
                         return None
                 
@@ -408,15 +447,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             # User was inactive for > 5 minutes, log it
                             minutes_inactive = (now - previous_activity).total_seconds() / 60
                             logger.info(
-                                f"USER RETURNED AFTER INACTIVITY: chat_id={self.chat_id}, "
-                                f"was_inactive_for={minutes_inactive:.1f} minutes, "
-                                f"previous_status={chat.status}"
+                                "USER RETURNED AFTER INACTIVITY: chat_id=%s, was_inactive_for=%.1f minutes, previous_status=%s",
+                                self.chat_id,
+                                minutes_inactive,
+                                chat.status
                             )
                             # If chat was inactive, reactivate it now that user sent a message
                             if chat.status == 'inactive':
                                 chat.status = 'active'
                                 chat.ended_at = None  # Clear ended_at since chat is active again
-                                logger.info(f"Chat {self.chat_id} reactivated from inactive status (user sent message)")
+                                logger.info("Chat %s reactivated from inactive status (user sent message)", self.chat_id)
                     
                     # Check if chat is active but user has been inactive for > 1 hour
                     # Auto-disconnect inactive chats (long-term cleanup)
@@ -424,10 +464,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         one_hour_ago = now - timedelta(hours=1)
                         if chat.last_user_activity < one_hour_ago:
                             # User was inactive for > 1 hour, auto-disconnect
+                            hours_inactive = (now - chat.last_user_activity).total_seconds() / 3600
                             logger.info(
-                                f"AUTO-DISCONNECTING INACTIVE CHAT (1 hour): chat_id={self.chat_id}, "
-                                f"last_user_activity={chat.last_user_activity}, "
-                                f"hours_inactive={(now - chat.last_user_activity).total_seconds() / 3600:.2f}"
+                                "AUTO-DISCONNECTING INACTIVE CHAT (1 hour): chat_id=%s, "
+                                "last_user_activity=%s, hours_inactive=%.2f",
+                                self.chat_id,
+                                chat.last_user_activity,
+                                hours_inactive
                             )
                             chat.status = 'completed'
                             if not chat.ended_at:
@@ -436,7 +479,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             if not chat.started_at:
                                 chat.started_at = chat.created_at or now
                             chat.save(update_fields=['status', 'ended_at', 'started_at', 'last_user_activity', 'updated_at'])
-                            logger.info(f"Chat {self.chat_id} auto-disconnected due to 1 hour inactivity")
+                            logger.info("Chat %s auto-disconnected due to 1 hour inactivity", self.chat_id)
                     
                     # Auto-activate chat if it's queued, completed, inactive, or cancelled (ONLY for user)
                     if chat.status in ['queued', 'completed', 'inactive', 'cancelled']:
@@ -445,19 +488,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         # Check wallet balance before activating chat (for user) - log warning if low
                         if old_status == 'queued':
                             from .utils.billing import check_chat_wallet_balance
-                            has_balance, balance_message, current_balance = check_chat_wallet_balance(chat.user)
+                            has_balance, _balance_message, current_balance = check_chat_wallet_balance(chat.user)
                             if not has_balance:
                                 logger.warning(
-                                    f"LOW WALLET BALANCE when activating chat: chat_id={self.chat_id}, "
-                                    f"user={chat.user.username}, balance=₹{current_balance}. "
-                                    f"Chat will be billed when it ends."
+                                    "LOW WALLET BALANCE when activating chat: chat_id=%s, user=%s, balance=Rs %s. "
+                                    "Chat will be billed when it ends.",
+                                    self.chat_id,
+                                    chat.user.username,
+                                    current_balance
                                 )
                                 # Still allow activation - billing will be handled when chat ends
                                 # If insufficient balance at that time, it will be logged
                         
                         logger.info(
-                            f"ACTIVATING CHAT: chat_id={self.chat_id}, current_status={old_status}, "
-                            f"activated_by={self.user.username} (USER)"
+                            "ACTIVATING CHAT: chat_id=%s, current_status=%s, activated_by=%s (USER)",
+                            self.chat_id,
+                            old_status,
+                            self.user.username
                         )
                         
                         # If chat is queued and user is sending, assign to first available counselor if not assigned
@@ -466,16 +513,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             if not chat.counsellor:
                                 # Try to auto-assign to first available counselor
                                 from django.contrib.auth import get_user_model
-                                User = get_user_model()
-                                available_counselor = User.objects.filter(
+                                UserModel = get_user_model()
+                                available_counselor = UserModel.objects.filter(
                                     counsellorprofile__isnull=False
                                 ).first()
                                 
                                 if available_counselor:
                                     chat.counsellor = available_counselor
                                     logger.info(
-                                        f"AUTO-ASSIGNED COUNSELOR: chat_id={self.chat_id}, "
-                                        f"counselor={available_counselor.username} (id={available_counselor.id})"
+                                        "AUTO-ASSIGNED COUNSELOR: chat_id=%s, counselor=%s (id=%s)",
+                                        self.chat_id,
+                                        available_counselor.username,
+                                        available_counselor.id
                                     )
                             
                             chat_was_activated = True
@@ -490,8 +539,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             # This means user wants to continue the conversation
                             chat_was_activated = True
                             logger.info(
-                                f"REOPENING CHAT: chat_id={self.chat_id}, "
-                                f"old_status={old_status}, ended_at={chat.ended_at}"
+                                "REOPENING CHAT: chat_id=%s, old_status=%s, ended_at=%s",
+                                self.chat_id,
+                                old_status,
+                                chat.ended_at
                             )
                             
                             # Notify counselor that user wants to continue chat
@@ -528,22 +579,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     session.save()
                                     
                                     logger.info(
-                                        f"AUTO-STARTED SESSION: session_id={session.id}, "
-                                        f"chat_id={self.chat_id}, started_at={now}"
+                                        "AUTO-STARTED SESSION: session_id=%s, chat_id=%s, started_at=%s",
+                                        session.id,
+                                        self.chat_id,
+                                        now
                                     )
-                            except Exception as e:
-                                logger.error(f"Error auto-starting session for chat {self.chat_id}: {e}", exc_info=True)
+                            except Exception as e:  # noqa: BLE001  # type: ignore[assignment]
+                                logger.error("Error auto-starting session for chat %s: %s", self.chat_id, e, exc_info=True)
                         
+                        counsellor_name = getattr(chat.counsellor, 'username', 'None') if chat.counsellor else 'None'
                         logger.info(
-                            f"Chat {self.chat_id} activated from {old_status} to active status. "
-                            f"Counsellor: {chat.counsellor.username if chat.counsellor else 'None'}"
+                            "Chat %s activated from %s to active status. Counsellor: %s",
+                            self.chat_id,
+                            old_status,
+                            counsellor_name
                         )
                 else:
                     # Counselor is sending message - do NOT activate chat
                     # But check if user has been inactive for 5+ minutes and mark chat as inactive
                     logger.info(
-                        f"COUNSELOR MESSAGE: chat_id={self.chat_id}, "
-                        f"counselor={self.user.username}, status={chat.status}"
+                        "COUNSELOR MESSAGE: chat_id=%s, counselor=%s, status=%s",
+                        self.chat_id,
+                        self.user.username,
+                        chat.status
                     )
                     
                     # Check if user has been inactive for 5+ minutes
@@ -553,9 +611,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             # User has been inactive for > 5 minutes, mark chat as inactive
                             minutes_inactive = (now - chat.last_user_activity).total_seconds() / 60
                             logger.info(
-                                f"AUTO-INACTIVATING CHAT (from counselor message): chat_id={self.chat_id}, "
-                                f"last_user_activity={chat.last_user_activity}, "
-                                f"minutes_inactive={minutes_inactive:.1f}"
+                                "AUTO-INACTIVATING CHAT (from counselor message): chat_id=%s, "
+                                "last_user_activity=%s, minutes_inactive=%.1f",
+                                self.chat_id,
+                                chat.last_user_activity,
+                                minutes_inactive
                             )
                             chat.status = 'inactive'
                             if not chat.ended_at:
@@ -564,14 +624,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             if not chat.started_at:
                                 chat.started_at = chat.created_at or timezone.now()
                             chat.save(update_fields=['status', 'ended_at', 'started_at', 'updated_at'])
-                            logger.info(f"Chat {self.chat_id} auto-inactivated due to 5 minutes user inactivity")
+                            logger.info("Chat %s auto-inactivated due to 5 minutes user inactivity", self.chat_id)
                     
                     # Don't change chat status or activate it for counselor messages
                 
                 # Create and save the message
                 logger.info(
-                    f"SAVING MESSAGE: chat_id={self.chat_id}, sender={self.user.username} (id={self.user.id}), "
-                    f"text_length={len(text)}, client_message_id={client_message_id}"
+                    "SAVING MESSAGE: chat_id=%s, sender=%s (id=%s), text_length=%s, client_message_id=%s",
+                    self.chat_id,
+                    self.user.username,
+                    self.user.id,
+                    len(text),
+                    client_message_id
                 )
                 
                 message = ChatMessage.objects.create(
@@ -587,27 +651,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 # Verify it was saved
                 saved_message = ChatMessage.objects.get(id=message.id)
                 logger.info(
-                    f"MESSAGE SAVED SUCCESSFULLY: message_id={saved_message.id}, chat_id={saved_message.chat_id}, "
-                    f"created_at={saved_message.created_at}, client_message_id={saved_message.client_message_id}"
+                    "MESSAGE SAVED SUCCESSFULLY: message_id=%s, chat_id=%s, created_at=%s, client_message_id=%s",
+                    saved_message.id,
+                    saved_message.chat_id,
+                    saved_message.created_at,
+                    saved_message.client_message_id
                 )
                 
                 # Count total messages for this chat
                 total_messages = ChatMessage.objects.filter(chat=chat).count()
-                logger.info(f"Total messages in chat {self.chat_id}: {total_messages}")
+                logger.info("Total messages in chat %s: %s", self.chat_id, total_messages)
                 
                 # Return message and whether chat was activated
                 return (saved_message, chat_was_activated)
-        except Exception as e:
-            logger.error(f"ERROR SAVING MESSAGE: chat_id={self.chat_id}, error={e}", exc_info=True)
+        except Exception as e:  # noqa: BLE001  # type: ignore[assignment]  # pylint: disable=broad-except
+            logger.error("ERROR SAVING MESSAGE: chat_id=%s, error=%s", self.chat_id, e, exc_info=True)
             raise
     
     @database_sync_to_async
-    def is_counselor(self, user):
+    def is_counselor(self, user: User) -> bool:
         """Check if user is a counselor."""
         return hasattr(user, 'counsellorprofile')
 
     @database_sync_to_async
-    def is_user_sender(self, chat_id, sender_id):
+    def is_user_sender(self, chat_id: int, sender_id: int) -> bool:
         """Check if sender is the chat user (not counsellor)."""
         try:
             chat = Chat.objects.get(id=chat_id)

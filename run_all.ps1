@@ -41,7 +41,35 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Determine project root relative to this script
-$projectRoot = $PSScriptRoot
+# $PSScriptRoot is set when script is executed directly (e.g., .\run_all.ps1)
+# If not set, try to get it from $MyInvocation
+if ($PSScriptRoot) {
+    $projectRoot = $PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+    # Fallback: get script directory from invocation
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $projectRoot = Split-Path -Parent $scriptPath
+} else {
+    # Last resort: assume script is run from project root
+    # This handles cases where script is dot-sourced or run in unusual ways
+    $projectRoot = (Get-Location).Path
+    Write-Warning "Could not determine script location automatically. Using current directory: $projectRoot"
+    Write-Warning "If paths are incorrect, ensure you run the script from the project root directory."
+}
+
+# Ensure we have an absolute path
+try {
+    if (Test-Path $projectRoot) {
+        $projectRoot = (Resolve-Path $projectRoot).Path
+    } else {
+        # Convert to absolute path if relative
+        $projectRoot = [System.IO.Path]::GetFullPath($projectRoot)
+    }
+} catch {
+    # If all else fails, use the path as-is
+    Write-Warning "Could not resolve absolute path for: $projectRoot. Using as-is."
+}
+
 $backendPath = Join-Path $projectRoot 'backend'
 $flutterPath = Join-Path $projectRoot 'apps\app_user'
 $pythonExe = Join-Path $projectRoot '.venv\Scripts\python.exe'
@@ -82,34 +110,42 @@ if (!(Test-Path $pythonExe)) {
     $pythonArgs = @()
 }
 
-if (!(Test-Path (Join-Path $flutterPath 'pubspec.yaml'))) {
-    Write-Error "Flutter project (pubspec.yaml) not found at $flutterPath."
+# Validate paths exist with helpful error messages
+
+if (!(Test-Path $backendPath)) {
+    Write-Error "Backend directory not found at: $backendPath`nProject root: $projectRoot`nPlease ensure you're running the script from the project root directory."
+    Write-Host "Current working directory: $(Get-Location)" -ForegroundColor Yellow
     exit 1
 }
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Starting Django Backend + User App" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-# Backend port will be determined dynamically (8000 or 8001)
-# Will be updated after port detection
-Write-Host "Device: $Device" -ForegroundColor Green
-Write-Host "Mode: $(if ($Release) { 'Release' } else { 'Debug' })" -ForegroundColor Green
+if (!(Test-Path $flutterPath)) {
+    Write-Error "Flutter app directory not found at: $flutterPath`nProject root: $projectRoot`nPlease ensure you're running the script from the project root directory."
+    Write-Host "Current working directory: $(Get-Location)" -ForegroundColor Yellow
+    exit 1
+}
+
+if (!(Test-Path (Join-Path $flutterPath 'pubspec.yaml'))) {
+    Write-Error "Flutter project (pubspec.yaml) not found at: $flutterPath`nProject root: $projectRoot`nPlease ensure the Flutter app is located at apps\app_user"
+    Write-Host "Current working directory: $(Get-Location)" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "Starting Django Backend + Flutter App..." -ForegroundColor Cyan
 # Email configuration - check environment variable
 $useConsoleEmail = $env:USE_CONSOLE_EMAIL
 if ($useConsoleEmail -eq 'true') {
-    Write-Host "Email: Console backend (OTPs in terminal)" -ForegroundColor Green
     [Environment]::SetEnvironmentVariable('USE_CONSOLE_EMAIL', 'true', 'Process')
 } else {
-    Write-Host "Email: SMTP backend (Gmail - smtp.gmail.com:587)" -ForegroundColor Green
     [Environment]::SetEnvironmentVariable('USE_CONSOLE_EMAIL', 'false', 'Process')
 }
-Write-Host ""
 
-Write-Host "[1/2] Starting Django backend..." -ForegroundColor Cyan
-Write-Host ""
+# Create logs directory in project root if it doesn't exist
+$logsDir = Join-Path $projectRoot 'logs'
+if (!(Test-Path $logsDir)) {
+    New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+}
 
 # Run database migrations first
-Write-Host "Creating migrations (if needed)..." -ForegroundColor Cyan
 Push-Location $backendPath
 try {
     $makemigrationsArgs = $pythonArgs + @('manage.py', 'makemigrations')
@@ -119,21 +155,22 @@ try {
         -NoNewWindow `
         -Wait `
         -PassThru `
-        -RedirectStandardOutput "$env:TEMP\django_makemigrations.txt" `
-        -RedirectStandardError "$env:TEMP\django_makemigrations_err.txt"
+        -RedirectStandardOutput (Join-Path $logsDir "django_makemigrations.txt") `
+        -RedirectStandardError (Join-Path $logsDir "django_makemigrations_err.txt")
 
     if ($makemigrationsProcess.ExitCode -eq 0) {
-        Write-Host "Migrations created/checked." -ForegroundColor Green
-        if (Test-Path "$env:TEMP\django_makemigrations.txt") {
-            $output = Get-Content "$env:TEMP\django_makemigrations.txt" -Raw
+        $makemigrationsOutputFile = Join-Path $logsDir "django_makemigrations.txt"
+        if (Test-Path $makemigrationsOutputFile) {
+            $output = Get-Content $makemigrationsOutputFile -Raw
             if ($output -and $output.Trim()) {
                 Write-Host $output -ForegroundColor Gray
             }
         }
     } else {
         Write-Warning "makemigrations had issues (exit code: $($makemigrationsProcess.ExitCode))"
-        if (Test-Path "$env:TEMP\django_makemigrations_err.txt") {
-            $errorOutput = Get-Content "$env:TEMP\django_makemigrations_err.txt" -Raw
+        $makemigrationsErrorFile = Join-Path $logsDir "django_makemigrations_err.txt"
+        if (Test-Path $makemigrationsErrorFile) {
+            $errorOutput = Get-Content $makemigrationsErrorFile -Raw
             if ($errorOutput) {
                 Write-Host $errorOutput -ForegroundColor Yellow
             }
@@ -145,7 +182,6 @@ finally {
     Pop-Location
 }
 
-Write-Host "Applying migrations..." -ForegroundColor Cyan
 Push-Location $backendPath
 try {
     $migrateArgs = $pythonArgs + @('manage.py', 'migrate', '--noinput')
@@ -155,15 +191,14 @@ try {
         -NoNewWindow `
         -Wait `
         -PassThru `
-        -RedirectStandardOutput "$env:TEMP\django_migrate.txt" `
-        -RedirectStandardError "$env:TEMP\django_migrate_err.txt"
+        -RedirectStandardOutput (Join-Path $logsDir "django_migrate.txt") `
+        -RedirectStandardError (Join-Path $logsDir "django_migrate_err.txt")
 
-    if ($migrateProcess.ExitCode -eq 0) {
-        Write-Host "Migrations applied successfully." -ForegroundColor Green
-    } else {
+    if ($migrateProcess.ExitCode -ne 0) {
         Write-Error "Migration failed with exit code $($migrateProcess.ExitCode):"
-        if (Test-Path "$env:TEMP\django_migrate_err.txt") {
-            $errorOutput = Get-Content "$env:TEMP\django_migrate_err.txt" -Raw
+        $migrateErrorFile = Join-Path $logsDir "django_migrate_err.txt"
+        if (Test-Path $migrateErrorFile) {
+            $errorOutput = Get-Content $migrateErrorFile -Raw
             if ($errorOutput) {
                 Write-Host $errorOutput -ForegroundColor Red
             }
@@ -176,10 +211,7 @@ finally {
     Pop-Location
 }
 
-Write-Host ""
-
 # Test if Django can start (check for syntax errors)
-Write-Host "Checking Django configuration..." -ForegroundColor Cyan
 Push-Location $backendPath
 try {
     $checkArgs = $pythonArgs + @('manage.py', 'check')
@@ -189,31 +221,27 @@ try {
     -NoNewWindow `
         -Wait `
         -PassThru `
-        -RedirectStandardOutput "$env:TEMP\django_check.txt" `
-        -RedirectStandardError "$env:TEMP\django_check_err.txt"
+        -RedirectStandardOutput (Join-Path $logsDir "django_check.txt") `
+        -RedirectStandardError (Join-Path $logsDir "django_check_err.txt")
 
     if ($checkProcess.ExitCode -ne 0) {
         Write-Error "Django configuration check failed:"
-        if (Test-Path "$env:TEMP\django_check_err.txt") {
-            $errorOutput = Get-Content "$env:TEMP\django_check_err.txt" -Raw
+        $checkErrorFile = Join-Path $logsDir "django_check_err.txt"
+        if (Test-Path $checkErrorFile) {
+            $errorOutput = Get-Content $checkErrorFile -Raw
             if ($errorOutput) {
                 Write-Host $errorOutput -ForegroundColor Red
             }
         }
         Write-Error "Please fix the errors above before starting the server."
         exit 1
-    } else {
-        Write-Host "Django configuration is valid." -ForegroundColor Green
     }
 }
 finally {
     Pop-Location
 }
 
-Write-Host ""
-
 # Check if port 8000 is already in use and stop any existing server
-Write-Host "Checking for existing server on port 8000..." -ForegroundColor Cyan
 
 # Function to find all processes using port 8000
 function Find-Port8000Processes {
@@ -279,9 +307,6 @@ $allFoundProcesses = @()
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     $foundProcesses = Find-Port8000Processes
     $allFoundProcesses += $foundProcesses
-    if ($foundProcesses.Count -gt 0) {
-        Write-Host "  Attempt $attempt : Found $($foundProcesses.Count) process(es) using port 8000" -ForegroundColor Gray
-    }
     if ($attempt -lt $maxAttempts) {
         Start-Sleep -Milliseconds 500
     }
@@ -307,7 +332,6 @@ if ($allProcesses) {
     }
     
     # Wait longer for port to be released
-    Write-Host "  Waiting for port 8000 to be released..." -ForegroundColor Gray
     Start-Sleep -Seconds 4
     
     # Verify port is free - check multiple times
@@ -328,20 +352,12 @@ if ($allProcesses) {
     }
     
     if ($portStillInUse) {
-        Write-Host "  Warning: Port 8000 may still be in use after stopping processes." -ForegroundColor Yellow
-        Write-Host "  Attempting to continue anyway..." -ForegroundColor Yellow
+        Write-Warning "Port 8000 may still be in use. Attempting to continue anyway..."
         Start-Sleep -Seconds 2
-    } else {
-        Write-Host "  Stopped $stoppedCount process(es). Port 8000 is now free." -ForegroundColor Green
     }
-} else {
-    Write-Host "Port 8000 is free. Proceeding..." -ForegroundColor Green
 }
 
 # Start backend in background (output will appear in this terminal)
-Write-Host "Starting Django server with Daphne (ASGI)..." -ForegroundColor Cyan
-Write-Host "Backend will run in this terminal. All output will appear here." -ForegroundColor Yellow
-Write-Host ""
 
 # Determine which port to use (8000 or 8001 as fallback)
 # Wait a moment for port to fully release after process cleanup
@@ -371,15 +387,9 @@ foreach ($testPort in $testPorts) {
     if (-not $isInUse) {
         $backendPort = $testPort
         if ($testPort -ne 8000) {
-            Write-Host "Port 8000 is in use, using port $testPort instead..." -ForegroundColor Yellow
+            Write-Host "Using port $testPort (8000 in use)" -ForegroundColor Yellow
         }
         break
-    } else {
-        # Also check with Get-NetTCPConnection for better visibility
-        $connCheck = Get-NetTCPConnection -LocalPort $testPort -ErrorAction SilentlyContinue
-        if ($connCheck) {
-            Write-Host "Port $testPort is in use (checked via Get-NetTCPConnection)" -ForegroundColor Gray
-        }
     }
 }
 
@@ -391,20 +401,18 @@ if (-not $backendPort) {
     exit 1
 }
 
-# Update the API URL display
-Write-Host "Backend API: http://127.0.0.1:$backendPort/api" -ForegroundColor Green
-
 # Start Django server with Daphne (for WebSocket support)
-Write-Host "Starting Django server with Daphne on port $backendPort..." -ForegroundColor Cyan
 Push-Location $backendPath
 
 # Build command arguments for Daphne
 $daphneArgs = @('-m', 'daphne', 'core.asgi:application', '--bind', '0.0.0.0', '--port', "$backendPort")
 
 # Redirect backend output to avoid interfering with Flutter's interactive commands
+# (logsDir already created earlier in the script)
 # Store in script scope so cleanup block can access them
-$script:backendOutputFile = Join-Path $env:TEMP "django_backend_output_$backendPort.txt"
-$script:backendErrorFile = Join-Path $env:TEMP "django_backend_error_$backendPort.txt"
+# Use project logs directory instead of system temp
+$script:backendOutputFile = Join-Path $logsDir "django_backend_output_$backendPort.txt"
+$script:backendErrorFile = Join-Path $logsDir "django_backend_error_$backendPort.txt"
 
 if ($pythonArgs.Count -gt 0) {
     $allArgs = $pythonArgs + $daphneArgs
@@ -432,13 +440,7 @@ Start-Sleep -Seconds 3
 
 # Check if backend process is still running
 if ($backendProcess -and !$backendProcess.HasExited) {
-    Write-Host "Backend started successfully with Daphne (ASGI) - WebSocket support enabled" -ForegroundColor Green
-    Write-Host "Server should be available at http://127.0.0.1:$backendPort" -ForegroundColor Green
-    Write-Host "WebSocket endpoint: ws://127.0.0.1:$backendPort/ws/chat/<chat_id>/" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Backend logs will appear in this terminal below..." -ForegroundColor Green
-    Write-Host "----------------------------------------" -ForegroundColor DarkGray
-    Write-Host ""
+    Write-Host "Backend started on port $backendPort" -ForegroundColor Green
     
     # Set up log tailing using runspace for real-time console output
     # Wait a moment for log file to be created
@@ -516,38 +518,15 @@ if ($backendProcess -and !$backendProcess.HasExited) {
     $script:backendProcess = $backendProcess
     $script:backendPort = $backendPort
 } else {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Red
-    Write-Host "Daphne server failed to start!" -ForegroundColor Red
-    Write-Host "========================================" -ForegroundColor Red
-Write-Host ""
-    
+    Write-Error "Daphne server failed to start!"
     if ($backendProcess -and $backendProcess.HasExited) {
         Write-Host "Process exited with code: $($backendProcess.ExitCode)" -ForegroundColor Yellow
     }
-    
-    Write-Host ""
-    Write-Host "Troubleshooting:" -ForegroundColor Yellow
-    Write-Host "1. Make sure Daphne is installed: pip install daphne" -ForegroundColor Yellow
-    Write-Host "2. Check if port $backendPort is already in use" -ForegroundColor Yellow
-    Write-Host "3. Verify virtual environment is activated" -ForegroundColor Yellow
-    Write-Host "4. Check Python path: $pythonExe" -ForegroundColor Yellow
-    Write-Host "5. Try running manually: cd backend; python -m daphne core.asgi:application --bind 0.0.0.0 --port $backendPort" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "IMPORTANT: If you see 'OSError: [WinError 10106]', this is a Windows asyncio issue." -ForegroundColor Red
-    Write-Host "This usually means your Python installation has a corrupted asyncio module." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Try these fixes:" -ForegroundColor Yellow
-    Write-Host "  a) python -m pip install --upgrade pip setuptools wheel" -ForegroundColor Cyan
-    Write-Host "  b) python -m pip install --force-reinstall asyncio" -ForegroundColor Cyan
-    Write-Host "  c) Reinstall Python 3.11 or try Python 3.12" -ForegroundColor Cyan
-    Write-Host "  d) Use WSL (Windows Subsystem for Linux) if available" -ForegroundColor Cyan
-    Write-Host ""
+    Write-Host "Troubleshooting: pip install daphne, check port $backendPort, verify venv" -ForegroundColor Yellow
     exit 1
 }
 
 if ($Device -eq 'windows') {
-    Write-Host "Ensuring no stale Flutter desktop processes..." -ForegroundColor Cyan
     Get-Process -Name 'app_user' -ErrorAction SilentlyContinue | ForEach-Object {
         try {
             $_.Kill()
@@ -569,22 +548,67 @@ if ($Device -eq 'windows') {
     }
 }
 
-Write-Host "[2/2] Launching Flutter User App..." -ForegroundColor Cyan
-Write-Host "----------------------------------------" -ForegroundColor DarkGray
-Write-Host "All output will appear in this terminal:" -ForegroundColor Cyan
-Write-Host "  - Backend logs (prefixed with [BACKEND])" -ForegroundColor Yellow
-Write-Host "  - Flutter app output (below)" -ForegroundColor Yellow
-Write-Host "  - Press Ctrl+C to stop both" -ForegroundColor Yellow
-Write-Host ""
-Write-Host "Flutter Hot Reload Commands:" -ForegroundColor Cyan
-Write-Host "  - Press 'r' (lowercase) to hot reload (quick refresh)" -ForegroundColor Green
-Write-Host "  - Press 'R' (capital) to hot restart (full restart)" -ForegroundColor Green
-Write-Host "  - Press 'q' to quit the Flutter app" -ForegroundColor Green
-Write-Host ""
-Write-Host "Note: Chrome DevTools cleanup errors (SocketException) are harmless" -ForegroundColor Gray
-Write-Host "      and can be safely ignored. They don't affect app functionality." -ForegroundColor Gray
-Write-Host "----------------------------------------" -ForegroundColor DarkGray
-Write-Host ""
+
+# Check if Flutter is available in PATH
+$flutterCmd = Get-Command flutter -ErrorAction SilentlyContinue
+if (!$flutterCmd) {
+    # Try to find Flutter in common installation locations
+    $flutterPaths = @(
+        "$env:LOCALAPPDATA\flutter\bin\flutter.bat",
+        "$env:ProgramFiles\flutter\bin\flutter.bat",
+        "$env:ProgramFiles(x86)\flutter\bin\flutter.bat",
+        "$env:USERPROFILE\flutter\bin\flutter.bat",
+        "$env:USERPROFILE\AppData\Local\flutter\bin\flutter.bat",
+        "C:\src\flutter\bin\flutter.bat",
+        "C:\flutter\bin\flutter.bat",
+        "D:\flutter\bin\flutter.bat",
+        "E:\flutter\bin\flutter.bat",
+        "$env:USERPROFILE\Documents\flutter\bin\flutter.bat",
+        "$env:USERPROFILE\Downloads\flutter\bin\flutter.bat"
+    )
+    
+    # Also search in common development directories
+    $devDirs = @("C:\src", "C:\dev", "C:\development", "D:\dev", "D:\development", "$env:USERPROFILE\dev", "$env:USERPROFILE\development")
+    foreach ($devDir in $devDirs) {
+        if (Test-Path $devDir) {
+            $flutterPaths += "$devDir\flutter\bin\flutter.bat"
+        }
+    }
+    
+    $flutterFound = $false
+    foreach ($path in $flutterPaths) {
+        if (Test-Path $path) {
+            $flutterCmd = $path
+            $flutterFound = $true
+            break
+        }
+    }
+    
+    if (!$flutterFound) {
+        Write-Host "Flutter not found - Running backend only on port $backendPort" -ForegroundColor Yellow
+        Write-Host "Install: https://flutter.dev/docs/get-started/install/windows" -ForegroundColor Gray
+        Write-Host "Press Ctrl+C to stop the backend." -ForegroundColor Yellow
+        
+        # Wait for user to stop backend
+        try {
+            while ($true) {
+                Start-Sleep -Seconds 1
+            }
+        }
+        catch {
+            # User pressed Ctrl+C
+        }
+        exit 0
+    }
+} else {
+    $flutterCmd = "flutter"
+}
+
+Write-Host "API: http://127.0.0.1:$backendPort/api | WebSocket: ws://127.0.0.1:$backendPort/ws/chat/<chat_id>/" -ForegroundColor Green
+
+# Create Flutter log file paths (for reference, Flutter runs interactively)
+$script:flutterLogFile = Join-Path $logsDir "flutter_output.log"
+$script:flutterErrorLogFile = Join-Path $logsDir "flutter_error.log"
 
 Push-Location $flutterPath
 try {
@@ -593,30 +617,25 @@ try {
         $flutterArgs += '--release'
     }
     
-    Write-Host "Starting Flutter app..." -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Backend logs will appear in real-time with [BACKEND] prefix." -ForegroundColor Green
-    Write-Host "Flutter output will appear below." -ForegroundColor Green
-    Write-Host ""
+    Write-Host "Starting Flutter app on $Device..." -ForegroundColor Cyan
     
     # Run Flutter directly - this blocks and shows output in this terminal
     # Backend logs are being displayed in real-time via the runspace (running in parallel)
     # Note: DevTools cleanup errors are harmless and can be ignored
-    flutter @flutterArgs
+    # Flutter needs to run directly for hot reload to work properly
+    & $flutterCmd @flutterArgs
 }
 catch {
     $errorMsg = $_.ToString()
     # DevTools cleanup errors are harmless - don't show them as critical errors
     if ($errorMsg -match "DevTools|websocket.*tooling|SocketException.*refused.*network connection") {
-        Write-Host "`nNote: Flutter DevTools cleanup warning (harmless)" -ForegroundColor Yellow
+        Write-Host "[FLUTTER] Note: DevTools cleanup warning (harmless)" -ForegroundColor Yellow
     } else {
-        Write-Host "`nError: $errorMsg" -ForegroundColor Red
+        Write-Host "[FLUTTER] Error: $errorMsg" -ForegroundColor Red
     }
 }
 finally {
     Pop-Location
-    Write-Host ""
-    Write-Host "----------------------------------------" -ForegroundColor DarkGray
     Write-Host "`nCleaning up..." -ForegroundColor Yellow
     
     # Stop log tailing runspace
@@ -634,7 +653,6 @@ finally {
     }
     
     # Stop the backend process gracefully
-    Write-Host "Stopping Django backend..." -ForegroundColor Yellow
     if ($script:backendProcess -and !$script:backendProcess.HasExited) {
         try {
             $script:backendProcess.CloseMainWindow() | Out-Null
@@ -651,19 +669,6 @@ finally {
         $script:backendProcess.WaitForExit()
     }
     
-    # Show backend log locations before cleanup
-    if ($script:backendOutputFile -and (Test-Path $script:backendOutputFile)) {
-        Write-Host "Backend output log: $script:backendOutputFile" -ForegroundColor Gray
-    }
-    if ($script:backendErrorFile -and (Test-Path $script:backendErrorFile)) {
-        Write-Host "Backend error log: $script:backendErrorFile" -ForegroundColor Gray
-    }
-    
-    # Clean up any remaining Flutter/Chrome processes (for web builds)
-    # Note: This is optional - Chrome will close when Flutter exits
-    if ($Device -match 'chrome|edge|web') {
-        Write-Host "Note: Chrome DevTools cleanup errors are harmless and can be ignored" -ForegroundColor Gray
-    }
 }
 
 Write-Host "All processes stopped." -ForegroundColor Green

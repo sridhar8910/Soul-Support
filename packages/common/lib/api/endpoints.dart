@@ -1,8 +1,7 @@
+import 'api_client.dart';
+
 class ApiEndpoints {
-  static const String base = String.fromEnvironment(
-    'BACKEND_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8000/api',
-  );
+  static String get base => ApiClient.base;
 
   // Authentication
   static String get sendOtp => '$base/auth/send-otp/';

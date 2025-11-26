@@ -4,7 +4,13 @@ Django models for the mental health counseling platform.
 All models are designed to ensure data persistence, proper relationships,
 and automatic timestamp management. Chat and message data is saved to
 the database for history and counselor access.
+
+Note: Django ORM dynamically adds attributes (.objects, .id, .user_id, etc.)
+Type checker warnings about these are false positives.
 """
+# type: ignore
+# pyright: reportAttributeAccessIssue=false
+# pylint: disable=no-member,broad-except
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import Q
@@ -100,12 +106,13 @@ class UserProfile(models.Model):
         verbose_name_plural = "User Profiles"
 
     def __str__(self) -> str:
-        return f"{self.user.username} - Profile"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} - Profile"
     
     def save(self, *args, **kwargs):
         """Ensure profile is always saved with timestamps."""
         super().save(*args, **kwargs)
-        logger.debug(f"UserProfile saved: user={self.user_id}, wallet={self.wallet_minutes}")
+        logger.debug("UserProfile saved: user=%s, wallet=%s", self.user_id, self.wallet_minutes)  # type: ignore[attr-defined]
 
 
 class CounsellorProfile(models.Model):
@@ -162,7 +169,8 @@ class CounsellorProfile(models.Model):
         verbose_name_plural = "Counselor Profiles"
 
     def __str__(self) -> str:
-        return f"{self.user.username} - Counselor"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} - Counselor"
 
 
 class DoctorProfile(models.Model):
@@ -223,7 +231,8 @@ class DoctorProfile(models.Model):
         verbose_name_plural = "Doctor Profiles"
 
     def __str__(self) -> str:
-        return f"{self.user.username} - Doctor"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} - Doctor"
 
 
 # ============================================================================
@@ -250,6 +259,10 @@ class Chat(models.Model):
     - ended_at: When chat ended (auto-set)
     - updated_at: Last update (auto-managed)
     """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._billing_processing: bool = False  # Flag to prevent recursive billing
     STATUS_QUEUED = "queued"
     STATUS_ACTIVE = "active"
     STATUS_INACTIVE = "inactive"  # User inactive for 5+ minutes
@@ -366,8 +379,9 @@ class Chat(models.Model):
 
     def __str__(self) -> str:
         """String representation of the chat."""
-        counsellor_name = self.counsellor.username if self.counsellor else "Unassigned"
-        return f"Chat {self.id}: {self.user.username} -> {counsellor_name} ({self.status})"
+        counsellor_name = getattr(self.counsellor, 'username', 'Unassigned') if self.counsellor else "Unassigned"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"Chat {self.id}: {username} -> {counsellor_name} ({self.status})"  # type: ignore[attr-defined]
     
     def save(self, *args, **kwargs):
         """
@@ -377,9 +391,9 @@ class Chat(models.Model):
         # Store previous status to detect status changes
         if self.pk:
             try:
-                old_instance = Chat.objects.get(pk=self.pk)
+                old_instance = Chat.objects.get(pk=self.pk)  # type: ignore[attr-defined]
                 old_status = old_instance.status
-            except Chat.DoesNotExist:
+            except Chat.DoesNotExist:  # type: ignore[attr-defined]
                 old_status = None
         else:
             old_status = None
@@ -391,7 +405,7 @@ class Chat(models.Model):
         if self.status == self.STATUS_ACTIVE and not self.started_at:
             self.started_at = timezone.now()
             fields_to_update.add('started_at')
-            logger.info(f"Chat {self.id} started at {self.started_at}")
+            logger.info("Chat %s started at %s", self.id, self.started_at)  # type: ignore[attr-defined]
 
         # Auto-set ended_at when chat is inactive, completed, or cancelled
         ending_chat = False
@@ -401,7 +415,7 @@ class Chat(models.Model):
         if self.status in [self.STATUS_INACTIVE, self.STATUS_COMPLETED, self.STATUS_CANCELLED]:
             if old_status != self.status:
                 status_changed_to_ending = True
-                logger.info(f"Chat {self.id} status changed to {self.status} (was {old_status})")
+                logger.info("Chat %s status changed to %s (was %s)", self.id, self.status, old_status)  # type: ignore[attr-defined]
             
             if not self.ended_at:
                 ending_chat = True
@@ -413,11 +427,11 @@ class Chat(models.Model):
                     # For completed/cancelled or no last_user_activity, set ended_at to now
                     self.ended_at = timezone.now()
                 fields_to_update.add('ended_at')
-                logger.info(f"Chat {self.id} ended at {self.ended_at} with status {self.status}")
+                logger.info("Chat %s ended at %s with status %s", self.id, self.ended_at, self.status)  # type: ignore[attr-defined]
             elif status_changed_to_ending:
                 # Status changed but ended_at already set - still need to process billing
                 ending_chat = True
-                logger.info(f"Chat {self.id} status changed to {self.status}, ended_at already set: {self.ended_at}")
+                logger.info("Chat %s status changed to %s, ended_at already set: %s", self.id, self.status, self.ended_at)  # type: ignore[attr-defined]
 
         # updated_at is auto-managed by Django (auto_now=True) so no need to set it here,
         # but keep the safe fallback if needed:
@@ -451,11 +465,18 @@ class Chat(models.Model):
             )
         
         if should_process_billing:
+            username = getattr(self.user, 'username', None) if self.user else None
             logger.info(
-                f"Chat {self.id} ended - triggering billing: "
-                f"status={self.status}, started_at={self.started_at}, ended_at={self.ended_at}, "
-                f"user={self.user.username if self.user else None}, is_billed={self.is_billed}, "
-                f"ending_chat={ending_chat}, status_changed={status_changed_to_ending}"
+                "Chat %s ended - triggering billing: status=%s, started_at=%s, ended_at=%s, "
+                "user=%s, is_billed=%s, ending_chat=%s, status_changed=%s",
+                self.id,  # type: ignore[attr-defined]
+                self.status,
+                self.started_at,
+                self.ended_at,
+                username,
+                self.is_billed,
+                ending_chat,
+                status_changed_to_ending
             )
             # Mark to prevent recursion
             self._billing_processing = True
@@ -468,41 +489,53 @@ class Chat(models.Model):
                 # Double-check that started_at is set (it should have been saved above)
                 if not self.started_at:
                     logger.warning(
-                        f"⚠️ Chat {self.id} ended but started_at is None after refresh. "
-                        f"This may prevent billing. Old status was {old_status}, new status is {self.status}."
+                        "[WARNING] Chat %s ended but started_at is None after refresh. "
+                        "This may prevent billing. Old status was %s, new status is %s.",
+                        self.id,  # type: ignore[attr-defined]
+                        old_status,
+                        self.status
                     )
                 
                 # Calculate billing and deduct from wallet
                 success = calculate_and_deduct_chat_billing(self)
                 if success:
-                    logger.info(f"✅ Billing processed successfully for chat {self.id}")
+                    logger.info("[OK] Billing processed successfully for chat %s", self.id)  # type: ignore[attr-defined]
                 else:
                     logger.error(
-                        f"❌ Billing processing failed for chat {self.id}. "
-                        f"This may be due to insufficient wallet balance or an error during deduction."
+                        "[FAILED] Billing processing failed for chat %s. "
+                        "This may be due to insufficient wallet balance or an error during deduction.",
+                        self.id  # type: ignore[attr-defined]
                     )
-            except Exception as e:
-                logger.error(f"❌ Error processing billing for chat {self.id}: {e}", exc_info=True)
+            except Exception as e:  # noqa: BLE001  # type: ignore[assignment]  # pylint: disable=broad-except
+                logger.error("[ERROR] Error processing billing for chat %s: %s", self.id, e, exc_info=True)  # type: ignore[attr-defined]
             finally:
                 # Clear flag
                 self._billing_processing = False
         elif (ending_chat or status_changed_to_ending) and self.is_billed:
-            logger.debug(f"Chat {self.id} already billed, skipping billing calculation")
+            logger.debug("Chat %s already billed, skipping billing calculation", self.id)  # type: ignore[attr-defined]
         elif ending_chat or status_changed_to_ending:
             logger.debug(
-                f"Chat {self.id} ended but billing skipped: "
-                f"is_billed={self.is_billed}, started_at={self.started_at}, ended_at={self.ended_at}"
+                "Chat %s ended but billing skipped: is_billed=%s, started_at=%s, ended_at=%s",
+                self.id,  # type: ignore[attr-defined]
+                self.is_billed,
+                self.started_at,
+                self.ended_at
             )
 
         logger.debug(
-            f"Chat {self.id} saved: user={self.user_id}, counsellor={self.counsellor_id}, "
-            f"status={self.status}, created_at={self.created_at}, updated_at={self.updated_at}"
+            "Chat %s saved: user=%s, counsellor=%s, status=%s, created_at=%s, updated_at=%s",
+            self.id,  # type: ignore[attr-defined]
+            self.user_id,  # type: ignore[attr-defined]
+            self.counsellor_id,  # type: ignore[attr-defined]
+            self.status,
+            self.created_at,
+            self.updated_at
         )
     
     @property
     def message_count(self) -> int:
         """Get the number of messages in this chat."""
-        return self.messages.count()
+        return self.messages.count()  # type: ignore[attr-defined]
     
     @property
     def current_duration_minutes(self) -> int:
@@ -551,7 +584,7 @@ class Chat(models.Model):
         """Check if chat is cancelled."""
         return self.status == self.STATUS_CANCELLED
     
-    def assign_counsellor(self, counsellor: User) -> None:
+    def assign_counsellor(self, counsellor: User) -> None:  # type: ignore[type-arg]
         """
         Assign a counselor to this chat and activate it.
         This ensures the chat is properly saved to database.
@@ -573,8 +606,13 @@ class Chat(models.Model):
         # Save to database
         self.save(update_fields=['counsellor', 'status', 'started_at', 'updated_at'])
         
+        counsellor_username = getattr(counsellor, 'username', 'Unknown')
+        counsellor_id = getattr(counsellor, 'id', 'Unknown')
         logger.info(
-            f"Chat {self.id} assigned to counselor {counsellor.username} (ID: {counsellor.id})"
+            "Chat %s assigned to counselor %s (ID: %s)",
+            self.id,  # type: ignore[attr-defined]
+            counsellor_username,
+            counsellor_id
         )
     
     def complete(self) -> None:
@@ -588,7 +626,7 @@ class Chat(models.Model):
         
         self.save(update_fields=['status', 'ended_at', 'started_at', 'updated_at'])
         
-        logger.info(f"Chat {self.id} completed at {self.ended_at}")
+        logger.info("Chat %s completed at %s", self.id, self.ended_at)  # type: ignore[attr-defined]
     
     def cancel(self) -> None:
         """Cancel the chat and set ended_at timestamp."""
@@ -601,7 +639,7 @@ class Chat(models.Model):
         
         self.save(update_fields=['status', 'ended_at', 'started_at', 'updated_at'])
         
-        logger.info(f"Chat {self.id} cancelled at {self.ended_at}")
+        logger.info("Chat %s cancelled at %s", self.id, self.ended_at)  # type: ignore[attr-defined]
     
     def reopen(self) -> None:
         """
@@ -610,7 +648,7 @@ class Chat(models.Model):
         Updates last_user_activity to current time.
         """
         if self.status not in [self.STATUS_COMPLETED, self.STATUS_INACTIVE, self.STATUS_CANCELLED]:
-            logger.warning(f"Chat {self.id} is already active (status: {self.status}), no need to reopen")
+            logger.warning("Chat %s is already active (status: %s), no need to reopen", self.id, self.status)  # type: ignore[attr-defined]
             return
         
         old_status = self.status
@@ -623,7 +661,7 @@ class Chat(models.Model):
         
         self.save(update_fields=['status', 'ended_at', 'started_at', 'last_user_activity', 'updated_at'])
         
-        logger.info(f"Chat {self.id} reopened from {old_status} to active status")
+        logger.info("Chat %s reopened from %s to active status", self.id, old_status)  # type: ignore[attr-defined]
     
     def mark_inactive(self) -> None:
         """
@@ -631,10 +669,9 @@ class Chat(models.Model):
         Sets ended_at timestamp to when inactivity occurred.
         """
         if self.status != self.STATUS_ACTIVE:
-            logger.warning(f"Chat {self.id} cannot be marked inactive (current status: {self.status})")
+            logger.warning("Chat %s cannot be marked inactive (current status: %s)", self.id, self.status)  # type: ignore[attr-defined]
             return
         
-        old_status = self.status
         self.status = self.STATUS_INACTIVE
         if not self.ended_at and self.last_user_activity:
             # Set ended_at to 5 minutes after last user activity
@@ -642,7 +679,7 @@ class Chat(models.Model):
             self.ended_at = self.last_user_activity + timedelta(minutes=5)
         
         self.save(update_fields=['status', 'ended_at', 'updated_at'])
-        logger.info(f"Chat {self.id} marked as inactive (user inactive for 5+ minutes)")
+        logger.info("Chat %s marked as inactive (user inactive for 5+ minutes)", self.id)  # type: ignore[attr-defined]
 
 
 class ChatMessage(models.Model):
@@ -717,7 +754,9 @@ class ChatMessage(models.Model):
         verbose_name_plural = "Chat Messages"
 
     def __str__(self) -> str:
-        return f"{self.sender.username}: {self.text[:50]}"
+        text_preview = str(self.text)[:50] if self.text else ""
+        username = getattr(self.sender, 'username', 'Unknown') if self.sender else 'Unknown'
+        return f"{username}: {text_preview}"
     
     def save(self, *args, **kwargs):
         """
@@ -730,8 +769,12 @@ class ChatMessage(models.Model):
         super().save(*args, **kwargs)
         
         logger.debug(
-            f"ChatMessage {self.id} saved: chat={self.chat_id}, sender={self.sender_id}, "
-            f"text_length={len(self.text)}, created_at={self.created_at}"
+            "ChatMessage %s saved: chat=%s, sender=%s, text_length=%s, created_at=%s",
+            self.id,  # type: ignore[attr-defined]
+            self.chat_id,  # type: ignore[attr-defined]
+            self.sender_id,  # type: ignore[attr-defined]
+            len(self.text),
+            self.created_at
         )
 
 
@@ -859,7 +902,7 @@ class UpcomingSession(models.Model):
     )
     
     @property
-    def duration_seconds(self):
+    def duration_seconds(self) -> int:
         """Calculate session duration in seconds."""
         if not self.actual_start_time:
             return 0
@@ -867,7 +910,7 @@ class UpcomingSession(models.Model):
         return int((end_time - self.actual_start_time).total_seconds())
     
     @property
-    def duration_minutes(self):
+    def duration_minutes(self) -> int:
         """Calculate session duration in minutes."""
         return self.duration_seconds // 60
 
@@ -884,7 +927,8 @@ class UpcomingSession(models.Model):
         verbose_name_plural = "Upcoming Sessions"
 
     def __str__(self) -> str:
-        return f"{self.user.username} -> {self.title} @ {self.start_time}"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} -> {self.title} @ {self.start_time}"
 
 
 class Call(models.Model):
@@ -990,7 +1034,12 @@ class Call(models.Model):
         verbose_name_plural = "Calls"
 
     def __str__(self) -> str:
-        return f"{self.user.username} -> {self.get_call_type_display()} ({self.status})"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        try:
+            call_type = self.get_call_type_display()  # pyright: ignore[reportAttributeAccessIssue]
+        except AttributeError:
+            call_type = self.call_type
+        return f"{username} -> {call_type} ({self.status})"
     
     def save(self, *args, **kwargs):
         """
@@ -1080,7 +1129,8 @@ class WellnessTask(models.Model):
         verbose_name_plural = "Wellness Tasks"
 
     def __str__(self) -> str:
-        return f"{self.user.username} • {self.title}"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} • {self.title}"
     
     def save(self, *args, **kwargs):
         """Ensure task is always saved with timestamps."""
@@ -1140,7 +1190,8 @@ class WellnessJournalEntry(models.Model):
         verbose_name_plural = "Wellness Journal Entries"
 
     def __str__(self) -> str:
-        return f"{self.user.username} • {self.title}"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} • {self.title}"
     
     def save(self, *args, **kwargs):
         """Ensure journal entry is always saved with timestamps."""
@@ -1177,7 +1228,8 @@ class MoodLog(models.Model):
         verbose_name_plural = "Mood Logs"
 
     def __str__(self) -> str:
-        return f"{self.user.username} -> {self.value} @ {self.recorded_at}"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        return f"{username} -> {self.value} @ {self.recorded_at}"
 
     def save(self, *args, **kwargs):
         """Ensure mood log is always saved with timestamp."""
@@ -1221,7 +1273,7 @@ class SupportGroup(models.Model):
         verbose_name_plural = "Support Groups"
 
     def __str__(self) -> str:
-        return self.name
+        return str(self.name) if self.name else "Unnamed Support Group"
 
 
 class SupportGroupMembership(models.Model):
@@ -1250,7 +1302,9 @@ class SupportGroupMembership(models.Model):
         verbose_name_plural = "Support Group Memberships"
 
     def __str__(self) -> str:
-        return f"{self.user.username} -> {self.group.slug}"
+        username = getattr(self.user, 'username', 'Unknown') if self.user else 'Unknown'
+        group_slug = getattr(self.group, 'slug', 'unknown') if self.group else 'unknown'
+        return f"{username} -> {group_slug}"
 
 
 # ============================================================================
@@ -1320,7 +1374,11 @@ class GuidanceResource(models.Model):
         verbose_name_plural = "Guidance Resources"
 
     def __str__(self) -> str:
-        return f"{self.get_resource_type_display()} • {self.title}"
+        try:
+            resource_type = self.get_resource_type_display()  # type: ignore[attr-defined]
+        except AttributeError:
+            resource_type = self.resource_type
+        return f"{resource_type} • {self.title}"
 
 
 class MusicTrack(models.Model):
@@ -1383,7 +1441,7 @@ class MusicTrack(models.Model):
         verbose_name_plural = "Music Tracks"
 
     def __str__(self) -> str:
-        return self.title
+        return str(self.title) if self.title else "Untitled Track"
 
 
 class MindCareBooster(models.Model):
@@ -1461,7 +1519,7 @@ class MindCareBooster(models.Model):
         verbose_name_plural = "Mind Care Boosters"
 
     def __str__(self) -> str:
-        return self.title
+        return str(self.title) if self.title else "Untitled Track"
 
 
 class MeditationSession(models.Model):
@@ -1539,7 +1597,7 @@ class MeditationSession(models.Model):
         verbose_name_plural = "Meditation Sessions"
 
     def __str__(self) -> str:
-        return self.title
+        return str(self.title) if self.title else "Untitled Track"
 
 
 # ============================================================================
@@ -1611,7 +1669,7 @@ class EmailOTP(models.Model):
         """Check if OTP is expired."""
         return timezone.now() >= self.expires_at
 
-    def mark_verified(self):
+    def mark_verified(self) -> None:
         """Mark OTP as verified and set verified_at timestamp."""
         self.is_verified = True
         self.verified_at = timezone.now()

@@ -1,0 +1,5 @@
+[EMAIL] Using SMTP backend - smtp.gmail.com:587
+Operations to perform:
+  Apply all migrations: admin, api, auth, contenttypes, sessions
+Running migrations:
+  No migrations to apply.

@@ -2,10 +2,12 @@
 Billing utilities for chat sessions.
 Implements time-based billing: 1 rupee per minute of active chat time.
 """
+# type: ignore
+# pyright: reportAttributeAccessIssue=false
+# pylint: disable=no-member,broad-except
 from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
-from datetime import timedelta
 from ..models import Chat, UserProfile
 import logging
 
@@ -42,7 +44,7 @@ def calculate_chat_duration_minutes(chat: Chat) -> int:
     duration_minutes = int(ceil(duration_seconds / 60))
     
     # Ensure minimum 1 minute billing for any chat that started and ended
-    # This guarantees ₹1 is charged even for very short chats (< 1 minute)
+    # This guarantees Rs 1 is charged even for very short chats (< 1 minute)
     if duration_minutes == 0 and chat.ended_at and chat.started_at:
         duration_minutes = 1
     
@@ -80,14 +82,14 @@ def deduct_chat_billing(chat: Chat, billing_amount: Decimal) -> bool:
     """
     try:
         if not chat.user:
-            logger.error(f"Chat {chat.id} has no user assigned")
+            logger.error("Chat %s has no user assigned", chat.id)
             return False
         
         # Convert billing_amount to int for wallet_minutes (which is an integer field)
         billing_amount_int = int(billing_amount)
         
         if billing_amount_int <= 0:
-            logger.info(f"Billing amount is {billing_amount_int}, no deduction needed for chat {chat.id}")
+            logger.info("Billing amount is %s, no deduction needed for chat %s", billing_amount_int, chat.id)
             return True
         
         with transaction.atomic():
@@ -96,22 +98,27 @@ def deduct_chat_billing(chat: Chat, billing_amount: Decimal) -> bool:
                 profile = UserProfile.objects.select_for_update().get(user=chat.user)
             except UserProfile.DoesNotExist:
                 # Create profile if it doesn't exist
-                logger.warning(f"UserProfile not found for user {chat.user.username}, creating one")
+                logger.warning("UserProfile not found for user %s, creating one", chat.user.username)
                 profile = UserProfile.objects.create(user=chat.user, wallet_minutes=0)
             
             old_balance = profile.wallet_minutes
             
             logger.info(
-                f"Attempting to deduct billing for chat {chat.id}: "
-                f"amount=₹{billing_amount_int}, current_balance=₹{old_balance}, user={chat.user.username}"
+                "Attempting to deduct billing for chat %s: amount=Rs %s, current_balance=Rs %s, user=%s",
+                chat.id,
+                billing_amount_int,
+                old_balance,
+                chat.user.username
             )
             
             # Check if user has sufficient balance
             if profile.wallet_minutes < billing_amount_int:
                 logger.warning(
-                    f"❌ Insufficient wallet balance for chat {chat.id}: "
-                    f"user has ₹{profile.wallet_minutes}, needs ₹{billing_amount_int}. "
-                    f"User: {chat.user.username}"
+                    "[FAILED] Insufficient wallet balance for chat %s: user has Rs %s, needs Rs %s. User: %s",
+                    chat.id,
+                    profile.wallet_minutes,
+                    billing_amount_int,
+                    chat.user.username
                 )
                 return False
             
@@ -123,15 +130,18 @@ def deduct_chat_billing(chat: Chat, billing_amount: Decimal) -> bool:
             profile.refresh_from_db()
             
             logger.info(
-                f"✅ Billing deducted successfully for chat {chat.id}: "
-                f"amount=₹{billing_amount_int}, balance: ₹{old_balance} -> ₹{profile.wallet_minutes}, "
-                f"user={chat.user.username}"
+                "[OK] Billing deducted successfully for chat %s: amount=Rs %s, balance: Rs %s -> Rs %s, user=%s",
+                chat.id,
+                billing_amount_int,
+                old_balance,
+                profile.wallet_minutes,
+                chat.user.username
             )
             
             return True
             
-    except Exception as e:
-        logger.error(f"❌ Error deducting billing for chat {chat.id}: {e}", exc_info=True)
+    except Exception as e:  # noqa: BLE001  # type: ignore[assignment]  # pylint: disable=broad-except
+        logger.error("[ERROR] Error deducting billing for chat %s: %s", chat.id, e, exc_info=True)
         return False
 
 
@@ -150,17 +160,17 @@ def calculate_and_deduct_chat_billing(chat: Chat) -> bool:
     try:
         chat.refresh_from_db()
     except Chat.DoesNotExist:
-        logger.error(f"Chat {chat.id} does not exist in database")
+        logger.error("Chat %s does not exist in database", chat.id)
         return False
     
     # Skip if already billed
     if chat.is_billed:
-        logger.debug(f"Chat {chat.id} already billed, skipping")
+        logger.debug("Chat %s already billed, skipping", chat.id)
         return True
     
     # Skip if chat never started
     if not chat.started_at:
-        logger.debug(f"Chat {chat.id} never started, no billing required")
+        logger.debug("Chat %s never started, no billing required", chat.id)
         # Mark as billed with 0 amount to prevent retries
         Chat.objects.filter(id=chat.id).update(
             is_billed=True,
@@ -172,7 +182,7 @@ def calculate_and_deduct_chat_billing(chat: Chat) -> bool:
     
     # Ensure ended_at is set
     if not chat.ended_at:
-        logger.warning(f"Chat {chat.id} ended but ended_at not set, using current time")
+        logger.warning("Chat %s ended but ended_at not set, using current time", chat.id)
         chat.ended_at = timezone.now()
         # Use update to avoid recursion
         Chat.objects.filter(id=chat.id).update(ended_at=chat.ended_at)
@@ -182,10 +192,16 @@ def calculate_and_deduct_chat_billing(chat: Chat) -> bool:
     duration_minutes = calculate_chat_duration_minutes(chat)
     billing_amount = calculate_chat_billing(chat)
     
+    username = getattr(chat.user, 'username', None) if chat.user else None
     logger.info(
-        f"Calculating billing for chat {chat.id}: "
-        f"duration_minutes={duration_minutes}, billing_amount=₹{billing_amount}, "
-        f"started_at={chat.started_at}, ended_at={chat.ended_at}, user={chat.user.username if chat.user else None}"
+        "Calculating billing for chat %s: duration_minutes=%s, billing_amount=Rs %s, "
+        "started_at=%s, ended_at=%s, user=%s",
+        chat.id,
+        duration_minutes,
+        billing_amount,
+        chat.started_at,
+        chat.ended_at,
+        username
     )
     
     # Deduct from wallet
@@ -193,15 +209,17 @@ def calculate_and_deduct_chat_billing(chat: Chat) -> bool:
     if billing_amount > 0:
         deduction_success = deduct_chat_billing(chat, billing_amount)
         if not deduction_success:
+            username = getattr(chat.user, 'username', None) if chat.user else None
             logger.error(
-                f"❌ FAILED to deduct ₹{billing_amount} from wallet for chat {chat.id}. "
-                f"User: {chat.user.username if chat.user else None}, "
-                f"Insufficient balance or error occurred."
+                "[FAILED] FAILED to deduct Rs %s from wallet for chat %s. User: %s, Insufficient balance or error occurred.",
+                billing_amount,
+                chat.id,
+                username
             )
     else:
         # No charge for 0 minutes
         deduction_success = True
-        logger.info(f"Chat {chat.id} has 0 minutes duration, no billing required")
+        logger.info("Chat %s has 0 minutes duration, no billing required", chat.id)
     
     # Update chat with billing information
     # Use update() to avoid triggering save() again (which would cause recursion)
@@ -219,17 +237,20 @@ def calculate_and_deduct_chat_billing(chat: Chat) -> bool:
         chat.refresh_from_db()
         
         logger.info(
-            f"✅ Billing processed for chat {chat.id}: "
-            f"duration={duration_minutes} minutes, amount=₹{billing_amount}, "
-            f"deduction_success={deduction_success}"
+            "[OK] Billing processed for chat %s: duration=%s minutes, amount=Rs %s, deduction_success=%s",
+            chat.id,
+            duration_minutes,
+            billing_amount,
+            deduction_success
         )
         return True
     else:
         # Log error - don't mark as billed if deduction failed
         logger.error(
-            f"❌ Failed to deduct billing for chat {chat.id}: "
-            f"amount=₹{billing_amount}, user wallet may be insufficient. "
-            f"Billing will be retried on next save."
+            "[FAILED] Failed to deduct billing for chat %s: amount=Rs %s, user wallet may be insufficient. "
+            "Billing will be retried on next save.",
+            chat.id,
+            billing_amount
         )
         # Still save duration and billing amount for record keeping
         # Don't mark as billed so it can be retried
@@ -281,14 +302,14 @@ def check_chat_wallet_balance(user) -> tuple[bool, str, int]:
         if profile.wallet_minutes < min_balance:
             return (
                 False,
-                f"Insufficient wallet balance. Minimum ₹{min_balance} required to start chat. "
-                f"Current balance: ₹{profile.wallet_minutes}",
+                f"Insufficient wallet balance. Minimum Rs {min_balance} required to start chat. "
+                f"Current balance: Rs {profile.wallet_minutes}",
                 profile.wallet_minutes
             )
         
         return (True, "", profile.wallet_minutes)
         
-    except Exception as e:
-        logger.error(f"Error checking wallet balance for user {user.username}: {e}", exc_info=True)
+    except Exception as e:  # noqa: BLE001  # type: ignore[assignment]  # pylint: disable=broad-except
+        logger.error("Error checking wallet balance for user %s: %s", user.username, e, exc_info=True)
         return (False, f"Error checking wallet balance: {str(e)}", 0)
 

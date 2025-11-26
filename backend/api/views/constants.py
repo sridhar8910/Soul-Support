@@ -1,0 +1,14 @@
+"""Constants used across views."""
+CALL_RATE_PER_MINUTE = 5
+CHAT_RATE_PER_MINUTE = 1
+MIN_CALL_BALANCE = 100
+MIN_CHAT_BALANCE = 50
+SERVICE_RATE_MAP = {
+    "call": CALL_RATE_PER_MINUTE,
+    "chat": CHAT_RATE_PER_MINUTE,
+}
+SERVICE_MIN_BALANCE_MAP = {
+    "call": MIN_CALL_BALANCE,
+    "chat": MIN_CHAT_BALANCE,
+}
+

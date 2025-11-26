@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -972,8 +974,160 @@ class LegacyFeatureDetail {
 
 class ApiClient {
   static const String _defaultBase = 'http://127.0.0.1:8000/api';
-  static const String base =
-      String.fromEnvironment('BACKEND_BASE_URL', defaultValue: _defaultBase);
+  static String? _detectedBase;
+  static bool _isDetecting = false;
+  
+  // Common ports to try for auto-detection
+  static const List<int> _commonPorts = [8000, 8001, 8002, 8003];
+  
+  static String get base {
+    // If explicitly set via environment variable, use it
+    final envBase = const String.fromEnvironment('BACKEND_BASE_URL');
+    if (envBase.isNotEmpty && envBase != '') {
+      return envBase;
+    }
+    
+    // Return detected base or default
+    return _detectedBase ?? _defaultBase;
+  }
+  
+  /// Auto-detect backend port by trying common ports
+  static Future<String> detectBackendPort() async {
+    // If already detecting, wait for it
+    while (_isDetecting) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    
+    // If already detected, return it
+    if (_detectedBase != null) {
+      return _detectedBase!;
+    }
+    
+    _isDetecting = true;
+    
+    try {
+      // Try each port in parallel for faster detection
+      final futures = _commonPorts.map((port) async {
+        final baseUrl = 'http://127.0.0.1:$port/api';
+        
+        // Method 1: Try health endpoint first
+        try {
+          final healthUrl = '$baseUrl/health/';
+          final healthResponse = await http.get(
+            Uri.parse(healthUrl),
+          ).timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => throw TimeoutException('Connection timeout'),
+          );
+          
+          if (healthResponse.statusCode == 200) {
+            print('[API] ✅ Found backend via health endpoint at: $baseUrl');
+            return baseUrl;
+          }
+        } catch (_) {
+          // Health endpoint failed, try alternative endpoints
+        }
+        
+        // Method 2: Try root API endpoint as fallback
+        try {
+          final rootUrl = '$baseUrl/';
+          final rootResponse = await http.get(
+            Uri.parse(rootUrl),
+          ).timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => throw TimeoutException('Connection timeout'),
+          );
+          
+          // 200 = success, 401/403 = endpoint exists but needs auth (backend is there!)
+          if (rootResponse.statusCode == 200 || 
+              rootResponse.statusCode == 401 || 
+              rootResponse.statusCode == 403) {
+            print('[API] ✅ Found backend via root endpoint at: $baseUrl');
+            return baseUrl;
+          }
+        } catch (_) {
+          // Root endpoint also failed
+        }
+        
+        // Method 3: Try /api/auth/token/ (expect 400/401/405 but means endpoint exists)
+        try {
+          final authUrl = '$baseUrl/auth/token/';
+          final authResponse = await http.get(
+            Uri.parse(authUrl),
+          ).timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => throw TimeoutException('Connection timeout'),
+          );
+          
+          // 200 = OK, 400/401/403/405 = endpoint exists (just wrong method or needs auth)
+          if (authResponse.statusCode == 200 ||
+              authResponse.statusCode == 400 ||
+              authResponse.statusCode == 401 ||
+              authResponse.statusCode == 403 ||
+              authResponse.statusCode == 405) {
+            print('[API] ✅ Found backend via auth endpoint at: $baseUrl');
+            return baseUrl;
+          }
+        } catch (_) {
+          // All methods failed for this port
+        }
+        
+        return null;
+      });
+      
+      final results = await Future.wait(futures);
+      final detected = results.firstWhere((result) => result != null, orElse: () => null);
+      
+      if (detected != null) {
+        _detectedBase = detected;
+        print('[API] ✅ Auto-detected backend at: $_detectedBase');
+        return _detectedBase!;
+      }
+      
+      // If no port found, use default
+      print('[API] ⚠️ Could not auto-detect backend, using default: $_defaultBase');
+      print('[API] 💡 Make sure backend is running on one of: ${_commonPorts.join(", ")}');
+      return _defaultBase;
+    } catch (e) {
+      print('[API] Error during port detection: $e');
+      return _defaultBase;
+    } finally {
+      _isDetecting = false;
+    }
+  }
+  
+  /// Ensure port detection has completed before making API calls
+  static Future<void> _ensurePortDetected() async {
+    // If not detected and not currently detecting, start detection
+    if (_detectedBase == null && !_isDetecting) {
+      print('[API] 🔍 Port not detected yet, starting detection...');
+      await detectBackendPort();
+    }
+    // If currently detecting, wait for it
+    else if (_isDetecting) {
+      print('[API] ⏳ Waiting for port detection to complete...');
+      while (_isDetecting) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
+    // Port already detected - log for debugging
+    if (_detectedBase != null) {
+      print('[API] ✅ Using detected backend: $_detectedBase');
+    }
+  }
+  
+  /// Force re-detection of backend port (useful if backend restarts on different port)
+  static Future<String> refreshBackendPort() async {
+    print('[API] 🔄 Forcing port re-detection...');
+    _detectedBase = null;
+    _isDetecting = false;
+    return await detectBackendPort();
+  }
+  
+  /// Get current backend URL (always returns the latest detected/default)
+  static String getCurrentBaseUrl() {
+    return base;
+  }
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(
@@ -1037,47 +1191,79 @@ class ApiClient {
   }
 
   Future<(bool, String?)> sendRegistrationOtp(String email) async {
-    final response = await http.post(
-      Uri.parse('$base/auth/send-otp/'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email}),
-    );
+    // Ensure port detection is complete before making the request
+    await _ensurePortDetected();
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$base/auth/send-otp/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email}),
+      ).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
 
-    if (response.statusCode == 200) {
-      return (true, null);
+      if (response.statusCode == 200) {
+        return (true, null);
+      }
+
+      return (
+        false,
+        _errorFromResponse(response, fallback: 'Failed to send OTP')
+      );
+    } on TimeoutException {
+      return (false, 'Request timed out. Please check your connection and try again.');
+    } on SocketException {
+      return (false, 'Network error. Please check your internet connection.');
+    } catch (e) {
+      return (false, 'Failed to send OTP: ${e.toString()}');
     }
-
-    return (
-      false,
-      _errorFromResponse(response, fallback: 'Failed to send OTP')
-    );
   }
 
   Future<(bool, String?, String?)> verifyRegistrationOtp({
     required String email,
     required String code,
   }) async {
-    final response = await http.post(
-      Uri.parse('$base/auth/verify-otp/'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'code': code}),
-    );
+    // Ensure port detection is complete before making the request
+    await _ensurePortDetected();
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$base/auth/verify-otp/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email, 'code': code}),
+      ).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
 
-    if (response.statusCode == 200) {
-      try {
-        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-        final token = decoded['token'] as String?;
-        return (true, null, token);
-      } catch (_) {
-        return (true, null, null);
+      if (response.statusCode == 200) {
+        try {
+          final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+          final token = decoded['token'] as String?;
+          return (true, null, token);
+        } catch (_) {
+          return (true, null, null);
+        }
       }
-    }
 
-    return (
-      false,
-      _errorFromResponse(response, fallback: 'OTP verification failed'),
-      null
-    );
+      return (
+        false,
+        _errorFromResponse(response, fallback: 'OTP verification failed'),
+        null
+      );
+    } on TimeoutException {
+      return (false, 'Request timed out. Please check your connection and try again.', null);
+    } on SocketException {
+      return (false, 'Network error. Please check your internet connection.', null);
+    } catch (e) {
+      return (false, 'OTP verification failed: ${e.toString()}', null);
+    }
   }
 
   Future<(bool, String?)> register({
@@ -1091,6 +1277,9 @@ class ApiClient {
     String? gender,
     required String otpToken,
   }) async {
+    // Ensure port detection is complete before making the request
+    await _ensurePortDetected();
+    
     final payload = <String, dynamic>{
       'username': username,
       'password': password,
@@ -1129,26 +1318,42 @@ class ApiClient {
   }
 
   Future<(bool, String?)> login(String username, String password) async {
-    final response = await http.post(
-      Uri.parse('$base/auth/token/'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'username': username,
-        'password': password,
-      }),
-    );
+    // Ensure port detection is complete before making the request
+    await _ensurePortDetected();
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$base/auth/token/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'username': username,
+          'password': password,
+        }),
+      ).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
 
-    if (response.statusCode == 200) {
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      await _saveTokens(
-          decoded['access'] as String, decoded['refresh'] as String);
-      return (true, null);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        await _saveTokens(
+            decoded['access'] as String, decoded['refresh'] as String);
+        return (true, null);
+      }
+
+      return (
+        false,
+        _errorFromResponse(response, fallback: 'Invalid credentials')
+      );
+    } on TimeoutException {
+      return (false, 'Request timed out. Please check your connection and try again.');
+    } on SocketException {
+      return (false, 'Network error. Please check your internet connection.');
+    } catch (e) {
+      return (false, 'Failed to connect: ${e.toString()}');
     }
-
-    return (
-      false,
-      _errorFromResponse(response, fallback: 'Invalid credentials')
-    );
   }
 
   Future<bool> _refreshTokenIfNeeded() async {
@@ -1198,6 +1403,9 @@ class ApiClient {
   Future<http.Response> _sendAuthorized(
     Future<http.Response> Function(String? accessToken) makeRequest,
   ) async {
+    // Ensure port detection is complete before making the request
+    await _ensurePortDetected();
+    
     Future<http.Response> attempt() async {
       final access = await _accessToken;
       if (access == null) {
@@ -2448,7 +2656,7 @@ class ApiClient {
 
     // Get WebSocket URL (ws:// for development, wss:// for production)
     // Note: WebSocket routing is at root level, not under /api/
-    // base is http://127.0.0.1:8000/api, so we need to remove /api for WebSocket
+    // base is http://127.0.0.1:8001/api, so we need to remove /api for WebSocket
     String httpBase = base;
     if (httpBase.endsWith('/api')) {
       httpBase = httpBase.substring(0, httpBase.length - 4);

@@ -48,8 +48,10 @@ from .views import (
     WellnessTaskDetailView,
     WellnessTaskListCreateView,
 )
+from .views.health_views import HealthCheckView
 
 urlpatterns = [
+    path("health/", HealthCheckView.as_view()),
     path("auth/register/", RegisterView.as_view()),
     path("auth/send-otp/", RegistrationSendOTPView.as_view()),
     path("auth/verify-otp/", RegistrationVerifyOTPView.as_view()),

@@ -289,7 +289,6 @@ class _WalletPageState extends State<WalletPage> {
             },
           ),
           const SizedBox(height: 24),
-          const Spacer(),
           SizedBox(
             width: double.infinity,
             child: FilledButton(

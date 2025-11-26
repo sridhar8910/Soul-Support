@@ -8,10 +8,21 @@ import 'screens/login_screen.dart';
 // Global logger instance for app_counsellor
 final appLogger = AppLogger('COUNSELLOR_APP');
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
   appLogger.info('=== COUNSELLOR APP STARTING ===');
   appLogger.debug('Initializing Counsellor App...');
-  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Auto-detect backend port on startup
+  try {
+    final detectedUrl = await ApiClient.detectBackendPort();
+    appLogger.info('Backend detected at: $detectedUrl');
+    // Small delay to ensure detection is fully complete
+    await Future.delayed(const Duration(milliseconds: 100));
+  } catch (e) {
+    appLogger.warning('Port detection failed, using default: $e');
+  }
 
   // Force portrait orientation for mobile
   SystemChrome.setPreferredOrientations([
@@ -36,7 +47,7 @@ class CounselorApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
-        cardTheme: CardTheme(elevation: 2),
+        cardTheme: const CardThemeData(elevation: 2),
         // Mobile-optimized theme
         appBarTheme: const AppBarTheme(centerTitle: false, elevation: 0),
         // Optimize touch targets for mobile

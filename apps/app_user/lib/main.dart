@@ -1,14 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:common/utils/app_logger.dart';
+import 'package:common/api/api_client.dart';
 
 import 'screens/splash_screen.dart';
 
 // Global logger instance for app_user
 final appLogger = AppLogger('USER_APP');
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
   appLogger.info('=== USER APP STARTING ===');
   appLogger.debug('Initializing User App...');
+  
+  // Auto-detect backend port on startup
+  try {
+    await ApiClient.detectBackendPort();
+  } catch (e) {
+    appLogger.debug('Port detection failed, using default: $e');
+  }
+  
   runApp(const MyApp());
 }
 

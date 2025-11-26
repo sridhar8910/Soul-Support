@@ -25,7 +25,7 @@ You can also launch the backend and Flutter client together from the repository 
 
 ### Backend Integration
 
-- The app expects the REST API at `http://127.0.0.1:8000/api` by default (see `services/api_client.dart`).
+- The app expects the REST API at `http://127.0.0.1:8001/api` by default (see `services/api_client.dart`).
 - Update the base URL or inject a custom client before building for other environments.
 - Ensure the Django server is running before logging in or registering within the app.
 
