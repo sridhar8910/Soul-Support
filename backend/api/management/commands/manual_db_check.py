@@ -21,27 +21,50 @@ class Command(BaseCommand):
         self.stdout.write("=" * 80)
         
         with connection.cursor() as cursor:
-            # Check if table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='api_chatmessage';")
+            # Check if table exists (database-agnostic)
+            if connection.vendor == 'sqlite':
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='api_chatmessage';")
+            else:  # PostgreSQL
+                cursor.execute("""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema = 'public' AND table_name = 'api_chatmessage';
+                """)
             table_exists = cursor.fetchone()
             
             if table_exists:
-                self.stdout.write(self.style.SUCCESS("✅ Table 'api_chatmessage' EXISTS"))
+                self.stdout.write(self.style.SUCCESS("[OK] Table 'api_chatmessage' EXISTS"))
                 
-                # Get table structure
-                cursor.execute("PRAGMA table_info(api_chatmessage);")
-                columns = cursor.fetchall()
-                
-                self.stdout.write("\nTable Structure:")
-                self.stdout.write(f"{'Column':<20} {'Type':<20} {'Not Null':<10} {'Default':<15}")
-                self.stdout.write("-" * 80)
-                for col in columns:
-                    cid, name, col_type, not_null, default, pk = col
-                    not_null_str = "YES" if not_null else "NO"
-                    default_str = str(default) if default else "NULL"
-                    self.stdout.write(f"{name:<20} {col_type:<20} {not_null_str:<10} {default_str:<15}")
+                # Get table structure (database-agnostic)
+                if connection.vendor == 'sqlite':
+                    cursor.execute("PRAGMA table_info(api_chatmessage);")
+                    columns = cursor.fetchall()
+                    self.stdout.write("\nTable Structure:")
+                    self.stdout.write(f"{'Column':<20} {'Type':<20} {'Not Null':<10} {'Default':<15}")
+                    self.stdout.write("-" * 80)
+                    for col in columns:
+                        cid, name, col_type, not_null, default, pk = col
+                        not_null_str = "YES" if not_null else "NO"
+                        default_str = str(default) if default else "NULL"
+                        self.stdout.write(f"{name:<20} {col_type:<20} {not_null_str:<10} {default_str:<15}")
+                else:  # PostgreSQL
+                    cursor.execute("""
+                        SELECT column_name, data_type, is_nullable, column_default
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'api_chatmessage'
+                        ORDER BY ordinal_position;
+                    """)
+                    columns = cursor.fetchall()
+                    self.stdout.write("\nTable Structure:")
+                    self.stdout.write(f"{'Column':<20} {'Type':<20} {'Nullable':<10} {'Default':<15}")
+                    self.stdout.write("-" * 80)
+                    for col in columns:
+                        name, col_type, nullable, default = col
+                        nullable_str = "YES" if nullable == 'YES' else "NO"
+                        default_str = str(default) if default else "NULL"
+                        self.stdout.write(f"{name:<20} {col_type:<20} {nullable_str:<10} {default_str:<15}")
             else:
-                self.stdout.write(self.style.ERROR("❌ Table 'api_chatmessage' DOES NOT EXIST!"))
+                self.stdout.write(self.style.ERROR("[ERROR] Table 'api_chatmessage' DOES NOT EXIST!"))
+                self.stdout.write("Please run migrations: python manage.py migrate")
                 return
         
         # Count records using ORM
@@ -49,8 +72,12 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("2. COUNTING RECORDS (ORM)"))
         self.stdout.write("=" * 80)
         
-        total_chats = Chat.objects.count()
-        total_messages = ChatMessage.objects.count()
+        try:
+            total_chats = Chat.objects.count()
+            total_messages = ChatMessage.objects.count()
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"[ERROR] Failed to query models: {e}"))
+            return
         
         self.stdout.write(f"\nTotal Chats: {total_chats}")
         self.stdout.write(f"Total Messages: {total_messages}")
@@ -66,7 +93,10 @@ class Command(BaseCommand):
         self.stdout.write("=" * 80)
         
         with connection.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM api_chatmessage;")
+            if connection.vendor == 'sqlite':
+                cursor.execute("SELECT COUNT(*) FROM api_chatmessage;")
+            else:  # PostgreSQL
+                cursor.execute('SELECT COUNT(*) FROM "api_chatmessage";')
             sql_count = cursor.fetchone()[0]
             self.stdout.write(f"\nDirect SQL COUNT: {sql_count}")
             
@@ -81,17 +111,30 @@ class Command(BaseCommand):
         self.stdout.write("=" * 80)
         
         with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT 
-                    id, 
-                    chat_id, 
-                    sender_id, 
-                    text, 
-                    created_at 
-                FROM api_chatmessage 
-                ORDER BY created_at DESC 
-                LIMIT 20;
-            """)
+            if connection.vendor == 'sqlite':
+                cursor.execute("""
+                    SELECT 
+                        id, 
+                        chat_id, 
+                        sender_id, 
+                        text, 
+                        created_at 
+                    FROM api_chatmessage 
+                    ORDER BY created_at DESC 
+                    LIMIT 20;
+                """)
+            else:  # PostgreSQL
+                cursor.execute("""
+                    SELECT 
+                        id, 
+                        chat_id, 
+                        sender_id, 
+                        text, 
+                        created_at 
+                    FROM "api_chatmessage" 
+                    ORDER BY created_at DESC 
+                    LIMIT 20;
+                """)
             
             rows = cursor.fetchall()
             

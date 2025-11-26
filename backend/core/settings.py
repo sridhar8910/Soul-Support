@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import timedelta
+import os
 import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -57,8 +58,12 @@ ASGI_APPLICATION = "core.asgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "soulsupport",
+        "USER": "postgres",
+        "PASSWORD": "2828",
+        "HOST": "localhost",
+        "PORT": "5432",
     }
 }
 
@@ -128,7 +133,6 @@ CORS_ALLOW_HEADERS = [
 # --- Email Configuration ---
 # For development: Use console backend to see OTPs in terminal
 # For production: Use SMTP backend with proper credentials
-import os
 USE_CONSOLE_EMAIL = os.environ.get('USE_CONSOLE_EMAIL', 'false').lower() == 'true'
 
 if USE_CONSOLE_EMAIL:

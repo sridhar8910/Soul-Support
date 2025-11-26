@@ -15,9 +15,36 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("CHECKING CHAT MESSAGES IN DATABASE"))
         self.stdout.write(self.style.SUCCESS("=" * 80))
         
+        # Check if tables exist first
+        from django.db import connection
+        with connection.cursor() as cursor:
+            if connection.vendor == 'sqlite':
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('api_chat', 'api_chatmessage');")
+            else:  # PostgreSQL
+                cursor.execute("""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name IN ('api_chat', 'api_chatmessage');
+                """)
+            existing_tables = [row[0] for row in cursor.fetchall()]
+        
+        if 'api_chat' not in existing_tables or 'api_chatmessage' not in existing_tables:
+            self.stdout.write(self.style.ERROR("\n[ERROR] Required tables do not exist!"))
+            self.stdout.write("Missing tables:")
+            if 'api_chat' not in existing_tables:
+                self.stdout.write("  - api_chat")
+            if 'api_chatmessage' not in existing_tables:
+                self.stdout.write("  - api_chatmessage")
+            self.stdout.write("\nPlease run migrations: python manage.py migrate")
+            return
+        
         # Count total messages
-        total_messages = ChatMessage.objects.count()
-        total_chats = Chat.objects.count()
+        try:
+            total_messages = ChatMessage.objects.count()
+            total_chats = Chat.objects.count()
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"\n[ERROR] Failed to query database: {e}"))
+            return
         
         self.stdout.write(f"\n📊 Database Statistics:")
         self.stdout.write(f"   Total Chats: {total_chats}")
