@@ -338,7 +338,7 @@ class Chat(models.Model):
         help_text="Last update timestamp"
     )
     
-    # Billing fields (time-based: 1 rupee per minute)
+    # Billing fields (time-based: 2 rupees per minute)
     billed_amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -557,7 +557,7 @@ class Chat(models.Model):
     def current_estimated_cost(self) -> float:
         """Calculate estimated cost for active chat or final cost for completed chat."""
         duration = self.duration_minutes if self.is_billed else self.current_duration_minutes
-        return float(duration * 1.00)  # 1 rupee per minute
+        return float(duration * 2.00)  # 2 rupees per minute
     
     @property
     def is_active(self) -> bool:

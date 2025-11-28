@@ -1,6 +1,6 @@
 """
 Billing utilities for chat sessions.
-Implements time-based billing: 1 rupee per minute of active chat time.
+Implements time-based billing: 2 rupees per minute of active chat time.
 """
 # type: ignore
 # pyright: reportAttributeAccessIssue=false
@@ -13,8 +13,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Billing rate: 1 rupee per minute
-CHAT_RATE_PER_MINUTE = Decimal('1.00')
+# Billing rate: 2 rupees per minute
+CHAT_RATE_PER_MINUTE = Decimal('2.00')
 
 
 def calculate_chat_duration_minutes(chat: Chat) -> int:
@@ -44,7 +44,7 @@ def calculate_chat_duration_minutes(chat: Chat) -> int:
     duration_minutes = int(ceil(duration_seconds / 60))
     
     # Ensure minimum 1 minute billing for any chat that started and ended
-    # This guarantees Rs 1 is charged even for very short chats (< 1 minute)
+    # This guarantees Rs 2 is charged even for very short chats (< 1 minute)
     if duration_minutes == 0 and chat.ended_at and chat.started_at:
         duration_minutes = 1
     
@@ -59,11 +59,11 @@ def calculate_chat_billing(chat: Chat) -> Decimal:
         chat: Chat instance
         
     Returns:
-        Decimal: Billing amount in rupees (1 rupee per minute)
+        Decimal: Billing amount in rupees (2 rupees per minute)
     """
     duration_minutes = calculate_chat_duration_minutes(chat)
     
-    # Calculate billing: 1 rupee per minute
+    # Calculate billing: 2 rupees per minute
     billing_amount = Decimal(duration_minutes) * CHAT_RATE_PER_MINUTE
     
     return billing_amount
@@ -297,7 +297,7 @@ def check_chat_wallet_balance(user) -> tuple[bool, str, int]:
     """
     try:
         profile, _ = UserProfile.objects.get_or_create(user=user)
-        min_balance = 1  # Minimum 1 rupee (1 minute) to start chat
+        min_balance = 2  # Minimum 2 rupees (1 minute) to start chat
         
         if profile.wallet_minutes < min_balance:
             return (

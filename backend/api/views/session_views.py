@@ -312,13 +312,6 @@ class SessionEndView(APIView):
                     # Refresh to get billing info
                     chat.refresh_from_db()
                     
-                    billing_info = None
-                    if getattr(chat, "is_billed", False):
-                        billing_info = {
-                            "billed_amount": float(getattr(chat, "billed_amount", 0.0)),
-                            "duration_minutes": getattr(chat, "duration_minutes", 0),
-                        }
-                    
                     # Calculate duration manually if needed
                     duration_seconds = 0
                     duration_minutes = 0
@@ -328,10 +321,29 @@ class SessionEndView(APIView):
                         duration_seconds = int(delta.total_seconds())
                         duration_minutes = int(ceil(duration_seconds / 60))
                     
-                    billed_amount = billing_info['billed_amount'] if billing_info else 0
+                    # Get billing info - try to get from chat object first
+                    billing_info = None
+                    billed_amount = 0.0
+                    
+                    # Try to get billed_amount from chat object (even if not marked as billed yet)
+                    if hasattr(chat, "billed_amount") and chat.billed_amount is not None:
+                        billed_amount = float(chat.billed_amount)
+                    elif hasattr(chat, "is_billed") and chat.is_billed:
+                        billed_amount = float(getattr(chat, "billed_amount", 0.0))
+                    else:
+                        # Calculate billing amount if not set yet (2 rupees per minute)
+                        from ..utils.billing import calculate_chat_billing
+                        billed_amount = float(calculate_chat_billing(chat))
+                    
+                    if getattr(chat, "is_billed", False) or billed_amount > 0:
+                        billing_info = {
+                            "billed_amount": billed_amount,
+                            "duration_minutes": getattr(chat, "duration_minutes", duration_minutes),
+                        }
+                    
                     logger.info(
                         "SessionEndView: Chat %s ended successfully (no session existed). "
-                        "Duration: %s minutes, Billing: Rs %s",
+                        "Duration: %s minutes, Billing: Rs %.2f",
                         chat.id,
                         duration_minutes,
                         billed_amount
