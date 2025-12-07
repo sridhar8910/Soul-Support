@@ -12,8 +12,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ..models import Chat, ChatMessage, UpcomingSession
-from ..serializers import QuickSessionSerializer, UpcomingSessionSerializer
+from ..models import Chat, ChatMessage, SessionRating, UpcomingSession
+from ..serializers import (
+    QuickSessionSerializer,
+    SessionRatingCreateSerializer,
+    SessionRatingSerializer,
+    UpcomingSessionSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -780,4 +785,157 @@ class QuickSessionView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class SessionHistoryView(generics.ListAPIView):
+    """Get session history (completed sessions) for user or counsellor."""
+    serializer_class = UpcomingSessionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Check if user is a counsellor
+        is_counsellor = hasattr(self.request.user, 'counsellorprofile')
+        
+        if is_counsellor:
+            # Counsellors see their assigned sessions
+            queryset = UpcomingSession.objects.filter(
+                counsellor=self.request.user,
+                session_status='completed'
+            )
+        else:
+            # Regular users see their own sessions
+            queryset = UpcomingSession.objects.filter(
+                user=self.request.user,
+                session_status='completed'
+            )
+        
+        # Optional filtering by date range
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if start_date:
+            try:
+                from datetime import datetime
+                start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                queryset = queryset.filter(actual_end_time__gte=start)
+            except (ValueError, AttributeError):
+                pass
+        
+        if end_date:
+            try:
+                from datetime import datetime
+                end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                queryset = queryset.filter(actual_end_time__lte=end)
+            except (ValueError, AttributeError):
+                pass
+        
+        return queryset.select_related('user', 'counsellor').order_by('-actual_end_time', '-id')
+
+
+class SessionRatingCreateView(APIView):
+    """Create a rating for a completed session."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request: Request) -> Response:
+        serializer = SessionRatingCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        session_id = serializer.validated_data['session_id']
+        rating_value = serializer.validated_data['rating']
+        feedback = serializer.validated_data.get('feedback', '')
+        
+        # Get the session
+        try:
+            session = UpcomingSession.objects.select_related('user', 'counsellor').get(id=session_id)
+        except UpcomingSession.DoesNotExist:
+            return Response(
+                {"error": "Session not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify user has access to this session
+        if session.user != request.user:
+            return Response(
+                {"error": "You can only rate your own sessions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Verify session is completed
+        if session.session_status != 'completed':
+            return Response(
+                {"error": "You can only rate completed sessions"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if rating already exists
+        if hasattr(session, 'rating'):
+            return Response(
+                {"error": "This session has already been rated"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify counsellor exists
+        if not session.counsellor:
+            return Response(
+                {"error": "Session has no counsellor assigned"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create rating
+        rating = SessionRating.objects.create(
+            session=session,
+            user=request.user,
+            counsellor=session.counsellor,
+            rating=rating_value,
+            feedback=feedback
+        )
+        
+        logger.info(
+            "Session %s rated %d stars by user %s",
+            session_id,
+            rating_value,
+            request.user.username
+        )
+        
+        return Response(
+            SessionRatingSerializer(rating).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+class SessionRatingListView(generics.ListAPIView):
+    """List ratings for sessions (for counsellors to see their ratings)."""
+    serializer_class = SessionRatingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Check if user is a counsellor
+        is_counsellor = hasattr(self.request.user, 'counsellorprofile')
+        
+        if is_counsellor:
+            # Counsellors see ratings they received
+            queryset = SessionRating.objects.filter(counsellor=self.request.user)
+        else:
+            # Regular users see ratings they gave
+            queryset = SessionRating.objects.filter(user=self.request.user)
+        
+        return queryset.select_related('session', 'user', 'counsellor').order_by('-created_at')
+
+
+class SessionRatingDetailView(generics.RetrieveAPIView):
+    """Get a specific session rating."""
+    serializer_class = SessionRatingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_url_kwarg = "rating_id"
+
+    def get_queryset(self):
+        # Check if user is a counsellor
+        is_counsellor = hasattr(self.request.user, 'counsellorprofile')
+        
+        if is_counsellor:
+            # Counsellors see ratings they received
+            return SessionRating.objects.filter(counsellor=self.request.user)
+        else:
+            # Regular users see ratings they gave
+            return SessionRating.objects.filter(user=self.request.user)
 

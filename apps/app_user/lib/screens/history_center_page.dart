@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:common/api/api_client.dart';
+import 'chat_history_viewer.dart';
+import 'call_details_viewer.dart';
 
 class AppPalette {
   static const primary = Color(0xFF8B5FBF);
@@ -26,58 +28,145 @@ class _HistoryCenterPageState extends State<HistoryCenterPage>
   late TabController _tabController;
 
   final ApiClient _api = ApiClient();
-  bool _loadingSessions = true;
-  String? _sessionsError;
-  List<UpcomingSessionItem> _sessions = const <UpcomingSessionItem>[];
+  
+  // Chat history state
+  bool _loadingChats = true;
+  String? _chatsError;
+  List<Map<String, dynamic>> _chats = [];
+  
+  // Call history state
+  bool _loadingCalls = false;
+  String? _callsError;
+  List<Map<String, dynamic>> _activeCalls = [];
+  List<Map<String, dynamic>> _callHistory = [];
+
+  // Payment history state
+  bool _loadingPayments = false;
+  String? _paymentsError;
+  WalletInfo? _walletData;
+
+  // Mood history state
+  bool _loadingMoodHistory = false;
+  String? _moodHistoryError;
+  Map<String, dynamic>? _moodHistoryData;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-    _loadSessions();
+    _tabController = TabController(length: 4, vsync: this);
+    _loadChats();
+    _loadCalls();
+    _loadPayments();
+    _loadMoodHistory();
+    
+    // Listen to tab changes to load data when switching tabs
+    _tabController.addListener(() {
+      if (_tabController.index == 0 && _chats.isEmpty && !_loadingChats) {
+        _loadChats();
+      } else if (_tabController.index == 1 && _callHistory.isEmpty && _activeCalls.isEmpty && !_loadingCalls) {
+        _loadCalls();
+      } else if (_tabController.index == 2 && _walletData == null && !_loadingPayments) {
+        _loadPayments();
+      } else if (_tabController.index == 3 && _moodHistoryData == null && !_loadingMoodHistory) {
+        _loadMoodHistory();
+      }
+    });
   }
 
-  Future<void> _loadSessions({bool showLoader = true}) async {
+  Future<void> _loadChats({bool showLoader = true}) async {
     if (showLoader) {
       setState(() {
-        _loadingSessions = true;
-        _sessionsError = null;
+        _loadingChats = true;
+        _chatsError = null;
       });
     } else {
       setState(() {
-        _sessionsError = null;
+        _chatsError = null;
       });
     }
 
     try {
-      final sessions = await _api.fetchUpcomingSessions();
+      final chats = await _api.getChatList();
       if (!mounted) return;
       setState(() {
-        _sessions = sessions;
-        _loadingSessions = false;
+        _chats = chats;
+        _loadingChats = false;
       });
     } on ApiClientException catch (error) {
       if (!mounted) return;
       setState(() {
-        _sessionsError = error.message;
-        _loadingSessions = false;
+        _chatsError = error.message;
+        _loadingChats = false;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _sessionsError = 'Unable to load session history. Please try again.';
-        _loadingSessions = false;
+        _chatsError = 'Unable to load chat history. Please try again.';
+        _loadingChats = false;
       });
     }
   }
 
-  Future<void> _refreshSessions() => _loadSessions(showLoader: false);
+  Future<void> _refreshChats() => _loadChats(showLoader: false);
 
-  List<UpcomingSessionItem> get _sortedSessions {
-    final list = [..._sessions];
-    list.sort((a, b) => b.startTime.compareTo(a.startTime));
-    return list;
+  Future<void> _loadPayments() async {
+    setState(() {
+      _loadingPayments = true;
+      _paymentsError = null;
+    });
+
+    try {
+      final walletData = await _api.getWallet();
+      if (!mounted) return;
+      setState(() {
+        _walletData = walletData;
+        _loadingPayments = false;
+      });
+    } on ApiClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _paymentsError = error.message;
+        _loadingPayments = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _paymentsError = 'Unable to load wallet information. Please try again.';
+        _loadingPayments = false;
+      });
+    }
   }
+
+  Future<void> _refreshPayments() => _loadPayments();
+
+  Future<void> _loadMoodHistory() async {
+    setState(() {
+      _loadingMoodHistory = true;
+      _moodHistoryError = null;
+    });
+
+    try {
+      final data = await _api.getMoodHistory(days: 30);
+      if (!mounted) return;
+      setState(() {
+        _moodHistoryData = data;
+        _loadingMoodHistory = false;
+      });
+    } on ApiClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _moodHistoryError = error.message;
+        _loadingMoodHistory = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _moodHistoryError = 'Unable to load mood history. Please try again.';
+        _loadingMoodHistory = false;
+      });
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -97,51 +186,50 @@ class _HistoryCenterPageState extends State<HistoryCenterPage>
             Tab(icon: Icon(Icons.chat_bubble_outline), text: 'Chat'),
             Tab(icon: Icon(Icons.call_outlined), text: 'Calls'),
             Tab(icon: Icon(Icons.payments_outlined), text: 'Payments'),
+            Tab(icon: Icon(Icons.mood), text: 'Mood'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [_buildChatHistory(), _buildCallHistory(), _buildPayments()],
+        children: [_buildChatHistory(), _buildCallHistory(), _buildPayments(), _buildMoodHistory()],
       ),
     );
   }
 
   Widget _buildChatHistory() {
-    if (_loadingSessions) {
+    if (_loadingChats) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_sessionsError != null) {
+    if (_chatsError != null) {
       return ListView(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
         children: [
-          const Icon(Icons.history, size: 48, color: AppPalette.subtext),
+          const Icon(Icons.chat_bubble_outline, size: 48, color: AppPalette.subtext),
           const SizedBox(height: 12),
           Text(
-            _sessionsError!,
+            _chatsError!,
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 16, color: AppPalette.text),
           ),
           const SizedBox(height: 12),
           FilledButton(
-            onPressed: _loadSessions,
+            onPressed: _loadChats,
             child: const Text('Retry'),
           ),
         ],
       );
     }
 
-    final orderedSessions = _sortedSessions;
-    if (orderedSessions.isEmpty) {
+    if (_chats.isEmpty) {
       return ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
         children: [
-          const Icon(Icons.chat_bubble_outline,
-              size: 48, color: AppPalette.subtext),
+          const Icon(Icons.chat_bubble_outline, size: 48, color: AppPalette.subtext),
           const SizedBox(height: 12),
           const Text(
-            'Session chat history will appear here',
+            'No chat history yet',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 18,
@@ -151,72 +239,64 @@ class _HistoryCenterPageState extends State<HistoryCenterPage>
           ),
           const SizedBox(height: 8),
           const Text(
-            'After each counselling session, a summary of the conversation will be listed below. '
-            'Here is a sample entry to show how it will look:',
+            'Your chat conversations with counsellors will appear here.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppPalette.subtext),
-          ),
-          const SizedBox(height: 24),
-          Card(
-            color: AppPalette.cardBg,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: AppPalette.border),
-            ),
-            child: const ListTile(
-              leading: CircleAvatar(
-                backgroundColor: AppPalette.primary,
-                child: Icon(Icons.person, color: Colors.white),
-              ),
-              title: Text(
-                'Therapist Sample',
-                style: TextStyle(
-                  color: AppPalette.text,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              subtitle: Text(
-                'Session summary available.\n3:30 PM',
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: Text(
-                '14/11/2025',
-                style: TextStyle(
-                  color: AppPalette.subtext,
-                  fontSize: 12,
-                ),
-              ),
-            ),
           ),
         ],
       );
     }
 
     return RefreshIndicator(
-      onRefresh: _refreshSessions,
+      onRefresh: _refreshChats,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(12),
-        itemCount: orderedSessions.length,
+        itemCount: _chats.length,
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          final session = orderedSessions[index];
-          final now = DateTime.now();
-          final isPast = session.startTime.isBefore(now);
-          final counsellor = session.counsellorName.isNotEmpty
-              ? session.counsellorName
-              : session.title.isNotEmpty
-                  ? session.title
-                  : 'Counsellor';
-          final summary = session.notes.isNotEmpty
-              ? session.notes
-              : isPast
-                  ? 'Session summary available.'
-                  : 'Scheduled ${DateFormat('EEE, MMM d').format(session.startTime)}';
-          final dateText = DateFormat('dd/MM/yyyy').format(session.startTime);
-          final timeText = DateFormat('h:mm a').format(session.startTime);
+          final chat = _chats[index];
+          final counsellorName = chat['counsellor_username'] as String? ?? 
+                                chat['counsellor'] as String? ?? 
+                                'Counsellor';
+          final status = chat['status'] as String? ?? 'unknown';
+          final createdAt = chat['created_at'] as String?;
+          final updatedAt = chat['updated_at'] as String?;
+          
+          DateTime? date;
+          String dateText = '';
+          String timeText = '';
+          
+          try {
+            if (updatedAt != null && updatedAt.isNotEmpty) {
+              date = DateTime.parse(updatedAt);
+            } else if (createdAt != null && createdAt.isNotEmpty) {
+              date = DateTime.parse(createdAt);
+            }
+            if (date != null) {
+              dateText = DateFormat('dd/MM/yyyy').format(date);
+              timeText = DateFormat('h:mm a').format(date);
+            }
+          } catch (e) {
+            dateText = 'Date unavailable';
+          }
 
+          // Status display
+          String statusText = status;
+          Color statusColor = AppPalette.subtext;
+          if (status == 'active') {
+            statusText = 'Active';
+            statusColor = Colors.green;
+          } else if (status == 'completed') {
+            statusText = 'Completed';
+            statusColor = Colors.blue;
+          } else if (status == 'queued') {
+            statusText = 'Waiting';
+            statusColor = Colors.orange;
+          }
+
+          final chatId = chat['id'] as int?;
+          
           return Card(
             color: AppPalette.cardBg,
             shape: RoundedRectangleBorder(
@@ -229,16 +309,34 @@ class _HistoryCenterPageState extends State<HistoryCenterPage>
                 child: Icon(Icons.person, color: Colors.white),
               ),
               title: Text(
-                counsellor,
+                counsellorName,
                 style: const TextStyle(
                   color: AppPalette.text,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              subtitle: Text(
-                '$summary\n$timeText',
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    statusText,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (timeText.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      timeText,
+                      style: const TextStyle(
+                        color: AppPalette.subtext,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ],
               ),
               trailing: Text(
                 dateText,
@@ -247,6 +345,19 @@ class _HistoryCenterPageState extends State<HistoryCenterPage>
                   fontSize: 12,
                 ),
               ),
+              onTap: chatId != null
+                  ? () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ChatHistoryViewer(
+                            chatId: chatId,
+                            counsellorName: counsellorName,
+                          ),
+                        ),
+                      );
+                    }
+                  : null,
             ),
           );
         },
@@ -254,123 +365,498 @@ class _HistoryCenterPageState extends State<HistoryCenterPage>
     );
   }
 
+  Future<void> _loadCalls({bool showLoader = true}) async {
+    if (showLoader) {
+      setState(() {
+        _loadingCalls = true;
+        _callsError = null;
+      });
+    } else {
+      setState(() {
+        _callsError = null;
+      });
+    }
+
+    try {
+      final response = await _api.getCallHistory();
+      if (!mounted) return;
+      
+      final activeCalls = (response['active_calls'] as List<dynamic>?)
+          ?.map((e) => e as Map<String, dynamic>)
+          .toList() ?? [];
+      final history = (response['history'] as List<dynamic>?)
+          ?.map((e) => e as Map<String, dynamic>)
+          .toList() ?? [];
+      
+      setState(() {
+        _activeCalls = activeCalls;
+        _callHistory = history;
+        _loadingCalls = false;
+      });
+    } on ApiClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _callsError = error.message;
+        _loadingCalls = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _callsError = 'Unable to load call history. Please try again.';
+        _loadingCalls = false;
+      });
+    }
+  }
+
+  Future<void> _refreshCalls() => _loadCalls(showLoader: false);
+
   Widget _buildCallHistory() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      children: [
-        const Icon(Icons.call, size: 48, color: AppPalette.subtext),
-        const SizedBox(height: 12),
-        const Text(
-          'Your call history will appear here',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: AppPalette.text,
+    if (_loadingCalls) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_callsError != null) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+        children: [
+          const Icon(Icons.call, size: 48, color: AppPalette.subtext),
+          const SizedBox(height: 12),
+          Text(
+            _callsError!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 16, color: AppPalette.text),
           ),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Once you speak with a counsellor, details such as duration and date will be listed below. '
-          'Here is a sample entry for reference:',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppPalette.subtext),
-        ),
-        const SizedBox(height: 24),
-        Card(
-          color: AppPalette.cardBg,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: AppPalette.border),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _loadCalls,
+            child: const Text('Retry'),
           ),
-          child: const ListTile(
-            leading: CircleAvatar(
-              backgroundColor: AppPalette.primary,
-              child: Icon(Icons.call, color: Colors.white),
-            ),
-            title: Text(
-              'Therapist Sample',
-              style: TextStyle(color: AppPalette.text),
-            ),
-            subtitle: Text('Duration: 20 mins'),
-            trailing: Text(
-              '14/11/2025',
-              style: TextStyle(color: AppPalette.subtext, fontSize: 12),
+        ],
+      );
+    }
+
+    final allCalls = [..._activeCalls, ..._callHistory];
+    
+    if (allCalls.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        children: [
+          const Icon(Icons.call, size: 48, color: AppPalette.subtext),
+          const SizedBox(height: 12),
+          const Text(
+            'Your call history will appear here',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: AppPalette.text,
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 8),
+          const Text(
+            'Once you speak with a counsellor, details such as duration and date will be listed below.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppPalette.subtext),
+          ),
+        ],
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _refreshCalls,
+      child: ListView.separated(
+        padding: const EdgeInsets.all(12),
+        itemCount: allCalls.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          final call = allCalls[index];
+          final callType = call['call_type'] as String? ?? 'video';
+          final status = call['status'] as String? ?? '';
+          final counsellorName = call['counsellor_username'] as String? ?? 'Counsellor';
+          final durationFormatted = call['duration_formatted'] as String? ?? 
+              (call['duration_seconds'] != null 
+                  ? '${(call['duration_seconds'] as int) ~/ 60} mins'
+                  : 'N/A');
+          
+          // Parse created_at or ended_at for date display
+          String? dateStr;
+          try {
+            final dateTimeStr = call['ended_at'] as String? ?? call['created_at'] as String?;
+            if (dateTimeStr != null) {
+              final dateTime = DateTime.parse(dateTimeStr);
+              dateStr = DateFormat('dd/MM/yyyy').format(dateTime);
+            }
+          } catch (e) {
+            dateStr = null;
+          }
+          
+          // Determine status color and text
+          Color statusColor = AppPalette.subtext;
+          String statusText = status;
+          if (status == 'ended') {
+            statusText = 'Completed';
+            statusColor = Colors.green;
+          } else if (status == 'active') {
+            statusText = 'Active';
+            statusColor = AppPalette.primary;
+          } else if (status == 'missed') {
+            statusText = 'Missed';
+            statusColor = Colors.orange;
+          } else if (status == 'cancelled') {
+            statusText = 'Cancelled';
+            statusColor = Colors.red;
+          }
+
+          final callId = call['id'] as int?;
+          
+          return Card(
+            color: AppPalette.cardBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: AppPalette.border),
+            ),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: AppPalette.primary,
+                child: Icon(
+                  callType == 'video' ? Icons.videocam : Icons.call,
+                  color: Colors.white,
+                ),
+              ),
+              title: Text(
+                counsellorName,
+                style: const TextStyle(
+                  color: AppPalette.text,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Duration: $durationFormatted',
+                    style: const TextStyle(color: AppPalette.subtext),
+                  ),
+                  if (statusText.isNotEmpty)
+                    Text(
+                      statusText,
+                      style: TextStyle(color: statusColor, fontSize: 12),
+                    ),
+                ],
+              ),
+              trailing: dateStr != null
+                  ? Text(
+                      dateStr,
+                      style: const TextStyle(
+                        color: AppPalette.subtext,
+                        fontSize: 12,
+                      ),
+                    )
+                  : null,
+              onTap: callId != null
+                  ? () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => CallDetailsViewer(
+                            callId: callId,
+                            counsellorName: counsellorName,
+                            callData: call,
+                          ),
+                        ),
+                      );
+                    }
+                  : null,
+            ),
+          );
+        },
+      ),
     );
   }
 
   Widget _buildPayments() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      children: [
-        const Icon(Icons.payments, size: 48, color: AppPalette.subtext),
-        const SizedBox(height: 12),
-        const Text(
-          'Payment records will show here',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: AppPalette.text,
+    if (_loadingPayments) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_paymentsError != null) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+        children: [
+          const Icon(Icons.payments, size: 48, color: AppPalette.subtext),
+          const SizedBox(height: 12),
+          Text(
+            _paymentsError!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 16, color: AppPalette.text),
           ),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'When you purchase sessions or recharge your wallet, a receipt entry will be listed below. '
-          'Here is an illustrative example:',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppPalette.subtext),
-        ),
-        const SizedBox(height: 24),
-        Card(
-          color: AppPalette.cardBg,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: AppPalette.border),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _loadPayments,
+            child: const Text('Retry'),
           ),
-          child: ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: AppPalette.soft,
-              child: Icon(Icons.receipt_long, color: AppPalette.primary),
+        ],
+      );
+    }
+
+    final walletMinutes = _walletData?.balance ?? 0;
+    final rates = _walletData?.rates ?? {};
+
+    return RefreshIndicator(
+      onRefresh: _refreshPayments,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Wallet Balance Card
+          Card(
+            color: AppPalette.cardBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: AppPalette.border),
             ),
-            title: const Text(
-              '#TXN1204',
-              style: TextStyle(color: AppPalette.text),
-            ),
-            subtitle: const Text('UPI • 499 INR'),
-            trailing: SizedBox(
-              height: 48,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    '05/11/2025',
-                    style: TextStyle(fontSize: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.account_balance_wallet, color: AppPalette.primary),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Wallet Balance',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppPalette.text,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.green,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Text(
-                      'Active',
-                      style: TextStyle(color: Colors.white, fontSize: 11),
+                  const SizedBox(height: 12),
+                  Text(
+                    '₹$walletMinutes',
+                    style: const TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: AppPalette.primary,
                     ),
                   ),
                 ],
               ),
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 16),
+          
+          // Service Rates
+          if (rates.isNotEmpty) ...[
+            const Text(
+              'Service Rates',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: AppPalette.text,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...rates.entries.map((entry) {
+              final service = entry.key;
+              final rate = entry.value;
+              return Card(
+                color: AppPalette.cardBg,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: AppPalette.border),
+                ),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: AppPalette.soft,
+                    child: Icon(
+                      service == 'call' ? Icons.phone : Icons.chat,
+                      color: AppPalette.primary,
+                    ),
+                  ),
+                  title: Text(
+                    service.toUpperCase(),
+                    style: const TextStyle(
+                      color: AppPalette.text,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    '₹$rate per minute',
+                    style: const TextStyle(color: AppPalette.subtext),
+                  ),
+                ),
+              );
+            }),
+          ],
+          
+          const SizedBox(height: 24),
+          const Text(
+            'Transaction History',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: AppPalette.text,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Card(
+            color: AppPalette.cardBg,
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Transaction history will be available soon. '
+                'You can recharge your wallet from the wallet section.',
+                style: TextStyle(color: AppPalette.subtext),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMoodHistory() {
+    if (_loadingMoodHistory) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_moodHistoryError != null) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+        children: [
+          const Icon(Icons.mood, size: 48, color: AppPalette.subtext),
+          const SizedBox(height: 12),
+          Text(
+            _moodHistoryError!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 16, color: AppPalette.text),
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _loadMoodHistory,
+            child: const Text('Retry'),
+          ),
+        ],
+      );
+    }
+
+    // Check if data exists and has entries (API returns 'recent_logs', not 'entries')
+    final recentLogs = _moodHistoryData?['recent_logs'];
+    if (_moodHistoryData == null || recentLogs == null || (recentLogs as List).isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        children: [
+          const Icon(Icons.mood, size: 48, color: AppPalette.subtext),
+          const SizedBox(height: 12),
+          const Text(
+            'Your mood history will appear here',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: AppPalette.text,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Start tracking your mood to see your history and trends.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppPalette.subtext),
+          ),
+        ],
+      );
+    }
+
+    final entries = (recentLogs as List).cast<Map<String, dynamic>>();
+    
+    return RefreshIndicator(
+      onRefresh: _loadMoodHistory,
+      child: ListView.separated(
+        padding: const EdgeInsets.all(12),
+        itemCount: entries.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          final entry = entries[index];
+          final value = entry['value'] as num? ?? 0;
+          final dateStr = entry['recorded_at'] as String? ?? '';
+          
+          DateTime? date;
+          String formattedDate = '';
+          try {
+            if (dateStr.isNotEmpty) {
+              date = DateTime.parse(dateStr);
+              formattedDate = DateFormat('dd/MM/yyyy').format(date);
+            }
+          } catch (e) {
+            formattedDate = dateStr;
+          }
+
+          // Determine mood emoji and color based on value
+          String moodEmoji = '😐';
+          Color moodColor = AppPalette.subtext;
+          if (value >= 4.5) {
+            moodEmoji = '😊';
+            moodColor = Colors.green;
+          } else if (value >= 3.5) {
+            moodEmoji = '🙂';
+            moodColor = Colors.lightGreen;
+          } else if (value >= 2.5) {
+            moodEmoji = '😐';
+            moodColor = Colors.orange;
+          } else if (value >= 1.5) {
+            moodEmoji = '😔';
+            moodColor = Colors.deepOrange;
+          } else {
+            moodEmoji = '😢';
+            moodColor = Colors.red;
+          }
+
+          return Card(
+            color: AppPalette.cardBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: AppPalette.border),
+            ),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: moodColor.withOpacity(0.1),
+                child: Text(
+                  moodEmoji,
+                  style: const TextStyle(fontSize: 24),
+                ),
+              ),
+              title: Text(
+                'Mood: ${value.toStringAsFixed(1)}/5.0',
+                style: const TextStyle(
+                  color: AppPalette.text,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                formattedDate.isNotEmpty ? formattedDate : 'Date not available',
+                style: const TextStyle(color: AppPalette.subtext),
+              ),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: moodColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  value.toStringAsFixed(1),
+                  style: TextStyle(
+                    color: moodColor,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

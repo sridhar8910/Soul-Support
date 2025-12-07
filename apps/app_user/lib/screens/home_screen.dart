@@ -259,7 +259,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
     try {
       final result = await _api.updateMood(
-        value: normalized.round(),
+        value: normalized, // Send decimal value for half-point precision
         timezone: _timeZoneName,
       );
       if (!mounted) return;
@@ -281,7 +281,7 @@ class _DashboardPageState extends State<DashboardPage> {
         if (result.updatesUsed != null) {
           _moodUpdatesToday = result.updatesUsed!.clamp(0, _maxMoodUpdatesPerDay);
         }
-        profile['last_mood'] = normalized.round();
+        profile['last_mood'] = normalized; // Store decimal value for half-point precision
         profile['mood_updates_count'] = _moodUpdatesToday;
         profile['mood_updates_date'] = DateTime.now().toIso8601String();
       });
@@ -2659,11 +2659,24 @@ class _ChatWithCounsellorPageState extends State<ChatWithCounsellorPage>
       if (!mounted) return;
 
       // Navigate to video/audio call screen
+      // The API returns 'id' not 'call_id' (from CallSerializer)
+      final callId = callData['id'] as int?;
+      if (callId == null) {
+        if (mounted) {
+          showErrorSnackBar(context, 'Failed to get call ID from server response');
+        }
+        return;
+      }
+
+      // Get TURN config and websocket URL from response
+      final turnConfig = callData['turn_config'] as Map<String, dynamic>?;
+      final websocketUrl = callData['websocket_url'] as String?;
+
       await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => VideoCallScreen(
-            callId: callData['call_id'] as int,
+            callId: callId,
             counsellorName: null, // Will be set when counsellor joins
             isVideoCall: callType == 'video',
           ),

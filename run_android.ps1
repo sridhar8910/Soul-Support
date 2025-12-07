@@ -1,6 +1,7 @@
 param(
     [switch]$Release,
     [string]$DeviceId,
+    [string]$AvdName,
     [string]$LanIp,
     [int]$BackendPort = 8000,
     [int]$DeviceBootTimeoutSeconds = 240,
@@ -134,18 +135,42 @@ function Find-AvailablePort {
 }
 
 function Get-AdbDevices {
-    $output = (& adb devices) 2>$null
-    foreach ($line in $output) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed) { continue }
-        if ($trimmed -like "List of devices*") { continue }
-        $parts = $trimmed -split "\s+"
-        if ($parts.Count -ge 2) {
-            [PSCustomObject]@{
-                Id     = $parts[0]
-                Status = $parts[1]
+    # Temporarily change error action to prevent termination on adb daemon messages
+    $oldErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        # Capture both stdout and stderr, filter out daemon startup messages
+        $output = & adb devices 2>&1 | ForEach-Object {
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                # Convert error records to strings, but filter out daemon messages
+                $_.Exception.Message
+            } else {
+                $_.ToString()
+            }
+            # Skip daemon startup messages
+            if ($line -like "*daemon*") {
+                return $null
+            }
+            return $line
+        } | Where-Object { $_ -ne $null }
+        
+        foreach ($line in $output) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed) { continue }
+            if ($trimmed -like "List of devices*") { continue }
+            $parts = $trimmed -split "\s+"
+            if ($parts.Count -ge 2) {
+                [PSCustomObject]@{
+                    Id     = $parts[0]
+                    Status = $parts[1]
+                }
             }
         }
+    } catch {
+        # Return empty array if adb fails
+        return @()
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
     }
 }
 
@@ -198,7 +223,8 @@ function Launch-Emulator {
         [string]$EmulatorExecutable,
         [string]$GpuMode,
         [int]$TimeoutSeconds,
-        [bool]$WipeData = $false
+        [bool]$WipeData = $false,
+        [string]$AvdName = $null
     )
 
     $avdList = (& $EmulatorExecutable -list-avds 2>$null | Out-String).Trim().Split("`r`n", [System.StringSplitOptions]::RemoveEmptyEntries)
@@ -206,7 +232,17 @@ function Launch-Emulator {
         throw "No Android Virtual Devices defined. Create one from Android Studio."
     }
 
-    $avdName = $avdList[0].Trim()
+    if ($AvdName) {
+        # find a match (case-insensitive)
+        $match = $avdList | Where-Object { $_.Trim().ToLower() -eq $AvdName.Trim().ToLower() }
+        if (-not $match) {
+            Write-Host "Requested AVD '$AvdName' not found. Available AVDs: $($avdList -join ', ')" -ForegroundColor Red
+            throw "Requested AVD not found."
+        }
+        $avdName = $match.Trim()
+    } else {
+        $avdName = $avdList[0].Trim()
+    }
     if ($WipeData) {
         Write-Step "Launching emulator '$avdName' with WIPE DATA (GPU: $GpuMode, Memory: 4096MB)"
     } else {
@@ -265,7 +301,8 @@ function Resolve-Device {
         [string]$EmulatorExecutable,
         [string]$GpuMode,
         [int]$TimeoutSeconds,
-        [bool]$WipeData = $false
+        [bool]$WipeData = $false,
+        [string]$AvdName = $null
     )
 
     if ($DeviceId) {
@@ -286,7 +323,7 @@ function Resolve-Device {
         throw "No Android devices detected and emulator launch disabled."
     }
 
-    return Launch-Emulator -EmulatorExecutable $EmulatorExecutable -GpuMode $GpuMode -TimeoutSeconds $TimeoutSeconds -WipeData $WipeData
+    return Launch-Emulator -EmulatorExecutable $EmulatorExecutable -GpuMode $GpuMode -TimeoutSeconds $TimeoutSeconds -WipeData $WipeData -AvdName $AvdName
 }
 
 function Resolve-LanIp {
@@ -357,12 +394,40 @@ if (-not (Test-Path $softwareGl) -and $GpuMode -eq "swiftshader_indirect") {
 }
 
 Write-Step "Resolving Android target"
-$deviceInfo = Resolve-Device -DeviceId $DeviceId -AllowLaunch:(-not $SkipEmulatorLaunch) -EmulatorExecutable $emulatorExe -GpuMode $GpuMode -TimeoutSeconds $DeviceBootTimeoutSeconds -WipeData $WipeData
+$deviceInfo = Resolve-Device -DeviceId $DeviceId -AllowLaunch:(-not $SkipEmulatorLaunch) -EmulatorExecutable $emulatorExe -GpuMode $GpuMode -TimeoutSeconds $DeviceBootTimeoutSeconds -WipeData $WipeData -AvdName $AvdName
 $targetDeviceId = $deviceInfo.Id
 
-Write-Step "Running database migrations"
+Write-Step "Creating and running database migrations"
 Push-Location $backendDir
 try {
+    # First, make all migrations
+    Write-Host "Creating migrations..." -ForegroundColor Cyan
+    $makemigrationsArgs = @("manage.py", "makemigrations")
+    $makemigrationsProcess = Start-Process -FilePath $pythonExe -ArgumentList $makemigrationsArgs -WorkingDirectory $backendDir -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:TEMP\django_makemigrations_android.txt" -RedirectStandardError "$env:TEMP\django_makemigrations_android_err.txt"
+    
+    if ($makemigrationsProcess.ExitCode -ne 0) {
+        Write-Warning "makemigrations had issues (exit code: $($makemigrationsProcess.ExitCode))"
+        if (Test-Path "$env:TEMP\django_makemigrations_android_err.txt") {
+            $errorOutput = Get-Content "$env:TEMP\django_makemigrations_android_err.txt" -Raw
+            if ($errorOutput) {
+                Write-Host $errorOutput -ForegroundColor Yellow
+            }
+        }
+    } else {
+        $makemigrationsOutput = ""
+        if (Test-Path "$env:TEMP\django_makemigrations_android.txt") {
+            $makemigrationsOutput = Get-Content "$env:TEMP\django_makemigrations_android.txt" -Raw
+        }
+        if ($makemigrationsOutput -and $makemigrationsOutput -notmatch "No changes detected") {
+            Write-Host "New migrations created:" -ForegroundColor Green
+            Write-Host $makemigrationsOutput -ForegroundColor Gray
+        } else {
+            Write-Host "No new migrations to create." -ForegroundColor Gray
+        }
+    }
+    
+    # Then, apply migrations
+    Write-Host "Applying migrations..." -ForegroundColor Cyan
     $migrateArgs = @("manage.py", "migrate", "--noinput")
     $migrateProcess = Start-Process -FilePath $pythonExe -ArgumentList $migrateArgs -WorkingDirectory $backendDir -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:TEMP\django_migrate_android.txt" -RedirectStandardError "$env:TEMP\django_migrate_android_err.txt"
     
@@ -453,4 +518,5 @@ try {
         Stop-ProcessSafe -Process $deviceInfo.Process
     }
 }
+
 

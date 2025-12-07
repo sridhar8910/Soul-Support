@@ -141,7 +141,7 @@ class MoodUpdateView(APIView):
         return Response(
             {
                 "status": "ok",
-                "mood": profile.last_mood,
+                "mood": float(profile.last_mood),
                 "updated_at": profile.last_mood_updated,
                 "updates_used": profile.mood_updates_count,
                 "updates_remaining": max(0, 3 - profile.mood_updates_count),

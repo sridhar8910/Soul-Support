@@ -3,17 +3,23 @@ Views for video/audio call management and WebRTC TURN credentials.
 """
 import logging
 from django.db.models import Q
-from rest_framework import generics, status
+from django.utils import timezone
+from rest_framework import generics, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.request import Request
+from rest_framework.views import APIView
 
 from ..models import Call
 from ..serializers import CallSerializer, CallAcceptSerializer
 from ..utils.turn_credentials import get_turn_configuration
 
 logger = logging.getLogger(__name__)
+
+# Constants for call billing (matching expected structure)
+CALL_RATE_PER_MINUTE = 5
+MIN_CALL_BALANCE = 100
 
 
 @api_view(['GET'])
@@ -41,14 +47,29 @@ def get_turn_credentials_view(request: Request) -> Response:
         )
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def create_call_view(request: Request) -> Response:
+class CallCreateView(APIView):
     """
-    Create a new call (video or voice).
+    Create a call request.
+    Uses WebRTC with TURN credentials instead of VideoSDK.
     """
-    try:
-        call_type = request.data.get('call_type', 'video')
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        # Check wallet balance
+        from ..utils.billing import check_call_wallet_balance
+        
+        has_balance, message, current_balance = check_call_wallet_balance(request.user)
+        if not has_balance:
+            return Response(
+                {
+                    "error": message,
+                    "wallet_minutes": current_balance,
+                    "required_minimum": MIN_CALL_BALANCE,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        call_type = request.data.get('call_type', Call.CALL_TYPE_VIDEO)
         counsellor_id = request.data.get('counsellor_id')
         
         if call_type not in [Call.CALL_TYPE_VIDEO, Call.CALL_TYPE_VOICE]:
@@ -83,24 +104,28 @@ def create_call_view(request: Request) -> Response:
             status=Call.STATUS_RINGING if counsellor else Call.STATUS_SCHEDULED,
         )
         
-        # Get TURN credentials
-        turn_config = get_turn_configuration()
+        # Get TURN credentials (using WebRTC instead of VideoSDK)
+        try:
+            turn_config = get_turn_configuration(user_id=request.user.id, use_cache=True)
+            turn_config.pop("_from_cache", None)  # Remove internal flag
+        except Exception as e:
+            logger.error("Error generating TURN credentials: %s", e, exc_info=True)
+            return Response(
+                {"error": "Failed to generate TURN credentials"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
-        logger.info("Call created: id=%s, type=%s, user=%s", call.id, call_type, request.user.username)
+        logger.info(
+            "Call %s created by user %s (type: %s, wallet: %s minutes)",
+            call.id, request.user.username, call_type, current_balance
+        )
         
-        return Response({
-            "call_id": call.id,
-            "call_type": call.call_type,
-            "status": call.status,
-            "turn_config": turn_config,
-            "websocket_url": f"ws://localhost:8000/ws/webrtc/{call.id}/",
-        }, status=status.HTTP_201_CREATED)
-        
-    except Exception as e:
-        logger.error("Error creating call: %s", e, exc_info=True)
         return Response(
-            {"error": "Failed to create call"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            CallSerializer(call, context={"request": request}).data | {
+                "turn_config": turn_config,
+                "websocket_url": f"ws://localhost:8000/ws/webrtc/{call.id}/",
+            },
+            status=status.HTTP_201_CREATED
         )
 
 
@@ -210,48 +235,112 @@ class CallAcceptView(generics.UpdateAPIView):
             from django.utils import timezone
             call.started_at = timezone.now()
             call.save()
-        
-        logger.info(
-            "Call %s accepted by counsellor %s",
-            call.id,
-            request.user.username
-        )
-        
-        logger.info(
-            "Call %s accepted by counsellor %s",
-            call.id,
-            request.user.username
-        )
-        
-        # Get TURN credentials (cached per user)
-        turn_config = get_turn_configuration(user_id=request.user.id, use_cache=True)
-        turn_config.pop("_from_cache", None)  # Remove internal flag
-        
-        serializer = CallSerializer(call)
-        return Response({
-            **serializer.data,
-            "turn_config": turn_config,
-        }, status=status.HTTP_200_OK)
+            
+            logger.info(
+                "Call %s accepted by counsellor %s",
+                call.id,
+                request.user.username
+            )
+            
+            # Get TURN credentials (cached per user) - using WebRTC instead of VideoSDK
+            try:
+                turn_config = get_turn_configuration(user_id=request.user.id, use_cache=True)
+                turn_config.pop("_from_cache", None)  # Remove internal flag
+            except Exception as e:
+                logger.error("Error generating TURN credentials: %s", e, exc_info=True)
+                return Response(
+                    {"error": "Failed to generate TURN credentials"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            serializer = CallSerializer(call)
+            return Response({
+                **serializer.data,
+                "turn_config": turn_config,
+            }, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def end_call_view(request: Request, call_id: int) -> Response:
-    """End a call."""
-    try:
-        if hasattr(request.user, 'counsellorprofile'):
-            call = Call.objects.get(id=call_id, counsellor=request.user)
-        else:
-            call = Call.objects.get(id=call_id, user=request.user)
-        
-        if call.status == Call.STATUS_ENDED:
+class CallTokenView(APIView):
+    """
+    Get TURN credentials for a participant.
+    Used when participant needs to join/rejoin the call.
+    Returns WebRTC TURN configuration instead of VideoSDK token.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, call_id):
+        try:
+            call = Call.objects.select_related('user', 'counsellor').get(id=call_id)
+        except Call.DoesNotExist:
             return Response(
-                {"error": "Call already ended"},
+                {"error": "Call not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify user is part of this call
+        if request.user != call.user and request.user != call.counsellor:
+            return Response(
+                {"error": "Not authorized"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if call.status != Call.STATUS_ACTIVE:
+            return Response(
+                {"error": "Call is not active"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        try:
+            # Get TURN credentials (using WebRTC instead of VideoSDK)
+            turn_config = get_turn_configuration(
+                user_id=request.user.id,
+                use_cache=True
+            )
+            turn_config.pop("_from_cache", None)  # Remove internal flag
+        except Exception as e:
+            logger.error("Failed to generate TURN credentials for call %s: %s", call_id, e)
+            return Response(
+                {"error": "Failed to generate TURN credentials"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        return Response({
+            "turn_config": turn_config,
+            "call_type": call.call_type,  # Include call type for frontend to enable video
+        })
+
+
+class CallEndView(APIView):
+    """
+    End a call.
+    Both participants can call this to mark call as ended.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, call_id):
+        try:
+            call = Call.objects.select_related('user', 'counsellor').get(id=call_id)
+        except Call.DoesNotExist:
+            return Response(
+                {"error": "Call not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify user is part of this call
+        if request.user != call.user and request.user != call.counsellor:
+            return Response(
+                {"error": "Not authorized"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if call.status == Call.STATUS_ENDED:
+            return Response(
+                {"message": "Call already ended"},
+                status=status.HTTP_200_OK
+            )
+        
+        # Mark call as ended
         call.status = Call.STATUS_ENDED
-        from django.utils import timezone
         if call.started_at:
             call.ended_at = timezone.now()
             delta = call.ended_at - call.started_at
@@ -267,16 +356,51 @@ def end_call_view(request: Request, call_id: int) -> Response:
             call.duration_seconds
         )
         
-        return Response(CallSerializer(call).data, status=status.HTTP_200_OK)
+        return Response({
+            'status': 'ended',
+            'call_id': call.id,
+            'duration_seconds': call.duration_seconds,
+            'duration_minutes': call.duration_seconds // 60 if call.duration_seconds else 0,
+        }, status=status.HTTP_200_OK)
+
+
+class CallHistoryView(APIView):
+    """Get call history for users, separated into active calls and history."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        # Check if user is a counsellor
+        is_counsellor = hasattr(request.user, 'counsellorprofile')
         
-    except Call.DoesNotExist:
-        return Response(
-            {"error": "Call not found"},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    except Exception as e:
-        logger.error("Error ending call: %s", e, exc_info=True)
-        return Response(
-            {"error": "Failed to end call"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        if is_counsellor:
+            # Counsellors see their assigned calls
+            all_calls = Call.objects.filter(
+                counsellor=request.user
+            ).select_related('user', 'counsellor').order_by('-created_at', '-id')
+        else:
+            # Regular users see their own calls
+            all_calls = Call.objects.filter(
+                user=request.user
+            ).select_related('user', 'counsellor').order_by('-created_at', '-id')
+        
+        # Separate into active and history
+        active_calls = [
+            call for call in all_calls 
+            if call.status in [Call.STATUS_SCHEDULED, Call.STATUS_RINGING, Call.STATUS_ACTIVE]
+        ]
+        history_calls = [
+            call for call in all_calls 
+            if call.status in [Call.STATUS_ENDED, Call.STATUS_MISSED, Call.STATUS_CANCELLED]
+        ]
+        
+        serializer = CallSerializer(active_calls, many=True, context={'request': request})
+        active_data = serializer.data
+        
+        serializer = CallSerializer(history_calls, many=True, context={'request': request})
+        history_data = serializer.data
+        
+        return Response({
+            'active_calls': active_data,
+            'history': history_data,
+            'total_history_count': len(history_calls),
+        })

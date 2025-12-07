@@ -1,8 +1,8 @@
 """Constants used across views."""
-CALL_RATE_PER_MINUTE = 5
-CHAT_RATE_PER_MINUTE = 2
-MIN_CALL_BALANCE = 100
-MIN_CHAT_BALANCE = 2
+CALL_RATE_PER_MINUTE = 5  # ₹5 per minute
+CHAT_RATE_PER_MINUTE = 1  # ₹1 per minute
+MIN_CALL_BALANCE = 100  # Minimum ₹100 balance required
+MIN_CHAT_BALANCE = 50  # Minimum ₹50 balance required
 SERVICE_RATE_MAP = {
     "call": CALL_RATE_PER_MINUTE,
     "chat": CHAT_RATE_PER_MINUTE,

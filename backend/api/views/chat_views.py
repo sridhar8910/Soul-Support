@@ -33,7 +33,7 @@ class ChatCreateView(APIView):
                 {
                     "error": message,
                     "wallet_minutes": current_balance,
-                    "required_minimum": 1,  # Minimum 1 rupee (1 minute) to start chat
+                    "required_minimum": 50,  # Minimum ₹50 balance required to start chat
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
@@ -414,3 +414,85 @@ class ChatMessageListView(generics.ListCreateAPIView):
             status=status.HTTP_201_CREATED
         )
 
+
+class ChatTranscriptView(APIView):
+    """Get read-only chat transcript with all messages."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request: Request, chat_id: int) -> Response:
+        try:
+            chat = Chat.objects.select_related('user', 'counsellor').get(id=chat_id)
+        except Chat.DoesNotExist:
+            return Response(
+                {"error": "Chat not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if user has access to this chat
+        is_chat_user = chat.user == request.user
+        is_chat_counsellor = chat.counsellor is not None and chat.counsellor == request.user
+        
+        if not is_chat_user and not is_chat_counsellor:
+            return Response(
+                {"error": "You don't have access to this chat"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get all messages
+        messages = ChatMessage.objects.filter(
+            chat=chat
+        ).select_related('sender').order_by("created_at", "id")
+        
+        # Format transcript
+        transcript = {
+            "chat_id": chat.id,
+            "user_name": chat.user.username,
+            "counsellor_name": chat.counsellor.username if chat.counsellor else None,
+            "status": chat.status,
+            "started_at": chat.started_at.isoformat() if chat.started_at else None,
+            "ended_at": chat.ended_at.isoformat() if chat.ended_at else None,
+            "duration_minutes": chat.duration_minutes if hasattr(chat, 'duration_minutes') else None,
+            "message_count": messages.count(),
+            "messages": [
+                {
+                    "id": msg.id,
+                    "sender": msg.sender.username,
+                    "text": msg.text,
+                    "created_at": msg.created_at.isoformat(),
+                }
+                for msg in messages
+            ],
+        }
+        
+        return Response(transcript, status=status.HTTP_200_OK)
+
+
+class ChatFilteredListView(generics.ListAPIView):
+    """List chats with filtering by status (active/completed)."""
+    serializer_class = ChatSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Check if user is a counselor
+        is_counselor = hasattr(self.request.user, 'counsellorprofile')
+        
+        # Get status filter from query params
+        status_filter = self.request.query_params.get('status', None)
+        
+        if is_counselor:
+            # For counselors: return chats where they are assigned
+            queryset = Chat.objects.filter(counsellor=self.request.user)
+        else:
+            # For regular users: return only their own chats
+            queryset = Chat.objects.filter(user=self.request.user)
+        
+        # Apply status filter
+        if status_filter:
+            if status_filter.lower() == 'active':
+                queryset = queryset.filter(status__in=[Chat.STATUS_ACTIVE, Chat.STATUS_QUEUED])
+            elif status_filter.lower() == 'completed':
+                queryset = queryset.filter(status__in=[Chat.STATUS_COMPLETED, Chat.STATUS_CANCELLED])
+            elif status_filter.lower() in [Chat.STATUS_ACTIVE, Chat.STATUS_QUEUED, Chat.STATUS_COMPLETED, Chat.STATUS_CANCELLED, Chat.STATUS_INACTIVE]:
+                queryset = queryset.filter(status=status_filter.lower())
+        
+        return queryset.select_related('user', 'counsellor').order_by("-created_at", "-updated_at")

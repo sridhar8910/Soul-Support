@@ -16,6 +16,8 @@ from .models import (
     MeditationSession,
     MindCareBooster,
     MusicTrack,
+    MyJournal,
+    SessionRating,
     SupportGroup,
     SupportGroupMembership,
     UpcomingSession,
@@ -165,7 +167,13 @@ class UserSettingsSerializer(serializers.ModelSerializer):
 
 
 class MoodUpdateSerializer(serializers.Serializer):
-    value = serializers.IntegerField(min_value=1, max_value=5)
+    value = serializers.DecimalField(
+        max_digits=3,
+        decimal_places=1,
+        min_value=1,
+        max_value=5,
+        help_text="Mood value from 1.0 to 5.0 with half-point precision (e.g., 1.5, 2.5, 3.5)"
+    )
     timezone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
@@ -214,6 +222,28 @@ class WellnessJournalEntrySerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "created_at", "formatted_date")
 
     def get_formatted_date(self, obj: WellnessJournalEntry) -> str:
+        local_dt = timezone.localtime(obj.created_at)
+        return local_dt.strftime("%d %b %Y • %I:%M %p")
+
+
+class MyJournalSerializer(serializers.ModelSerializer):
+    formatted_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MyJournal
+        fields = (
+            "id",
+            "entry",
+            "emoji",
+            "date",
+            "write_something",
+            "created_at",
+            "updated_at",
+            "formatted_date",
+        )
+        read_only_fields = ("id", "created_at", "updated_at", "formatted_date")
+
+    def get_formatted_date(self, obj: MyJournal) -> str:
         local_dt = timezone.localtime(obj.created_at)
         return local_dt.strftime("%d %b %Y • %I:%M %p")
 
@@ -445,6 +475,37 @@ class QuickSessionSerializer(serializers.Serializer):
     time = serializers.TimeField()
     title = serializers.CharField(max_length=160, required=False, allow_blank=True)
     notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class SessionRatingSerializer(serializers.ModelSerializer):
+    session_title = serializers.CharField(source="session.title", read_only=True)
+    counsellor_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SessionRating
+        fields = (
+            "id",
+            "session",
+            "session_title",
+            "user",
+            "counsellor",
+            "counsellor_name",
+            "rating",
+            "feedback",
+            "created_at",
+        )
+        read_only_fields = ("id", "user", "counsellor", "created_at")
+    
+    def get_counsellor_name(self, obj):
+        if obj.counsellor and hasattr(obj.counsellor, "counsellorprofile"):
+            return obj.counsellor.get_full_name() or obj.counsellor.username
+        return obj.counsellor.username if obj.counsellor else None
+
+
+class SessionRatingCreateSerializer(serializers.Serializer):
+    session_id = serializers.IntegerField()
+    rating = serializers.IntegerField(min_value=1, max_value=5)
+    feedback = serializers.CharField(required=False, allow_blank=True)
 
 
 class GuidanceResourceSerializer(serializers.ModelSerializer):

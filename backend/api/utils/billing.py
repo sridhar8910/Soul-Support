@@ -1,6 +1,6 @@
 """
 Billing utilities for chat sessions.
-Implements time-based billing: 2 rupees per minute of active chat time.
+Implements time-based billing: 1 rupee per minute of active chat time.
 """
 # type: ignore
 # pyright: reportAttributeAccessIssue=false
@@ -13,8 +13,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Billing rate: 2 rupees per minute
-CHAT_RATE_PER_MINUTE = Decimal('2.00')
+# Billing rate: 1 rupee per minute
+CHAT_RATE_PER_MINUTE = Decimal('1.00')
 
 
 def calculate_chat_duration_minutes(chat: Chat) -> int:
@@ -297,7 +297,7 @@ def check_chat_wallet_balance(user) -> tuple[bool, str, int]:
     """
     try:
         profile, _ = UserProfile.objects.get_or_create(user=user)
-        min_balance = 2  # Minimum 2 rupees (1 minute) to start chat
+        min_balance = 50  # Minimum ₹50 balance required to start chat
         
         if profile.wallet_minutes < min_balance:
             return (
@@ -313,3 +313,31 @@ def check_chat_wallet_balance(user) -> tuple[bool, str, int]:
         logger.error("Error checking wallet balance for user %s: %s", user.username, e, exc_info=True)
         return (False, f"Error checking wallet balance: {str(e)}", 0)
 
+
+def check_call_wallet_balance(user) -> tuple[bool, str, int]:
+    """
+    Check if user has sufficient wallet balance to start a call.
+    
+    Args:
+        user: Django User instance
+        
+    Returns:
+        tuple: (has_sufficient_balance: bool, message: str, current_balance: int)
+    """
+    try:
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        min_balance = 100  # Minimum 100 rupees to start call
+        
+        if profile.wallet_minutes < min_balance:
+            return (
+                False,
+                f"Insufficient wallet balance. Minimum Rs {min_balance} required to start call. "
+                f"Current balance: Rs {profile.wallet_minutes}",
+                profile.wallet_minutes
+            )
+        
+        return (True, "", profile.wallet_minutes)
+        
+    except Exception as e:  # noqa: BLE001  # type: ignore[assignment]  # pylint: disable=broad-except
+        logger.error("Error checking wallet balance for user %s: %s", user.username, e, exc_info=True)
+        return (False, f"Error checking wallet balance: {str(e)}", 0)

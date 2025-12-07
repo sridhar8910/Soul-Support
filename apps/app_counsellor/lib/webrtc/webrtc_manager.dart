@@ -31,7 +31,7 @@ class WebRTCManager {
   bool _isMuted = false;
   bool _isVideoEnabled = true;
   bool _isSpeakerEnabled = false;
-  
+
   // Track connection states
   RTCPeerConnectionState _peerConnectionState = RTCPeerConnectionState.RTCPeerConnectionStateNew;
   RTCIceConnectionState _iceConnectionState = RTCIceConnectionState.RTCIceConnectionStateNew;

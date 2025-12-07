@@ -1,53 +1,5 @@
 [EMAIL] Using SMTP backend - smtp.gmail.com:587
-INFO 2025-12-07 10:40:42,094 cli Starting server at tcp:port=8001:interface=0.0.0.0
-INFO 2025-12-07 10:40:42,095 server HTTP/2 support not enabled (install the http2 and tls Twisted extras)
-INFO 2025-12-07 10:40:42,095 server Configuring endpoint tcp:port=8001:interface=0.0.0.0
-INFO 2025-12-07 10:40:42,096 server Listening on TCP address 0.0.0.0:8001
-127.0.0.1:52155 - - [07/Dec/2025:10:41:17] "GET /api/health/" 200 44
-127.0.0.1:52155 - - [07/Dec/2025:10:41:38] "OPTIONS /api/auth/token/" 200 -
-WARNING 2025-12-07 10:41:38,979 log Unauthorized: /api/auth/token/
-127.0.0.1:52155 - - [07/Dec/2025:10:41:38] "POST /api/auth/token/" 401 63
-127.0.0.1:52155 - - [07/Dec/2025:10:41:51] "POST /api/auth/token/" 200 536
-127.0.0.1:52155 - - [07/Dec/2025:10:41:51] "OPTIONS /api/profile/" 200 -
-127.0.0.1:52155 - - [07/Dec/2025:10:41:51] "GET /api/profile/" 200 405
-127.0.0.1:52155 - - [07/Dec/2025:10:41:52] "OPTIONS /api/wallet/" 200 -
-127.0.0.1:52155 - - [07/Dec/2025:10:41:52] "GET /api/wallet/" 200 90
-127.0.0.1:52155 - - [07/Dec/2025:10:41:55] "OPTIONS /api/chats/list/" 200 -
-127.0.0.1:49880 - - [07/Dec/2025:10:41:55] "GET /api/wallet/" 200 90
-127.0.0.1:52155 - - [07/Dec/2025:10:41:55] "GET /api/chats/list/" 200 1159
-127.0.0.1:56602 - - [07/Dec/2025:10:42:22] "GET /api/health/" 200 44
-127.0.0.1:60234 - - [07/Dec/2025:10:43:35] "OPTIONS /api/calls/create/" 200 -
-INFO 2025-12-07 10:43:35,336 turn_credentials Generated TURN credentials for username=1765088015, expires in 3600 seconds
-INFO 2025-12-07 10:43:35,337 call_views Call created: id=28, type=voice, user=sridhar
-127.0.0.1:60234 - - [07/Dec/2025:10:43:35] "POST /api/calls/create/" 201 315
-127.0.0.1:60234 - - [07/Dec/2025:10:43:35] "OPTIONS /api/calls/turn-credentials/" 200 -
-INFO 2025-12-07 10:43:39,509 turn_credentials Generated TURN credentials for username=1765088019, expires in 3600 seconds
-INFO 2025-12-07 10:43:43,518 call_views TURN credentials requested by user sridhar (cached: no)
-127.0.0.1:60234 - - [07/Dec/2025:10:43:43] "GET /api/calls/turn-credentials/" 200 193
-127.0.0.1:53977 - - [07/Dec/2025:10:43:50] "WSCONNECTING /ws/webrtc/28/" - -
-INFO 2025-12-07 10:43:50,499 consumers_webrtc WebRTC CONNECT attempt: call_id=28, user=sridhar
-127.0.0.1:53977 - - [07/Dec/2025:10:43:50] "WSCONNECT /ws/webrtc/28/" - -
-INFO 2025-12-07 10:43:50,651 consumers_webrtc WebRTC CONNECT success: Joined group webrtc_call_28 (user=sridhar)
-INFO 2025-12-07 10:43:50,913 consumers_webrtc WebRTC RECEIVE: call_id=28, type=offer, user=sridhar
-INFO 2025-12-07 10:43:50,914 consumers_webrtc WebRTC RECEIVE: call_id=28, type=ice-candidate, user=sridhar
-INFO 2025-12-07 10:45:05,685 consumers_webrtc WebRTC RECEIVE: call_id=28, type=call-ended, user=sridhar
-INFO 2025-12-07 10:45:05,686 consumers_webrtc Call ended by user sridhar (call_id=28)
-INFO 2025-12-07 10:45:05,686 consumers_webrtc Cleaned up stored messages for call 28
-127.0.0.1:53977 - - [07/Dec/2025:10:45:05] "WSDISCONNECT /ws/webrtc/28/" - -
-INFO 2025-12-07 10:45:05,698 consumers_webrtc WebRTC DISCONNECT: Left group webrtc_call_28 (close_code=None)
-127.0.0.1:58789 - - [07/Dec/2025:10:45:05] "GET /api/wallet/" 200 90
-INFO 2025-12-07 10:45:08,436 turn_credentials Generated TURN credentials for username=1765088108, expires in 3600 seconds
-INFO 2025-12-07 10:45:08,436 call_views Call created: id=29, type=voice, user=sridhar
-127.0.0.1:58789 - - [07/Dec/2025:10:45:08] "POST /api/calls/create/" 201 315
-INFO 2025-12-07 10:45:12,623 turn_credentials Generated TURN credentials for username=1765088112, expires in 3600 seconds
-INFO 2025-12-07 10:45:16,643 call_views TURN credentials requested by user sridhar (cached: no)
-127.0.0.1:58789 - - [07/Dec/2025:10:45:16] "GET /api/calls/turn-credentials/" 200 193
-127.0.0.1:63492 - - [07/Dec/2025:10:45:17] "WSCONNECTING /ws/webrtc/29/" - -
-INFO 2025-12-07 10:45:17,756 consumers_webrtc WebRTC CONNECT attempt: call_id=29, user=sridhar
-127.0.0.1:63492 - - [07/Dec/2025:10:45:17] "WSCONNECT /ws/webrtc/29/" - -
-INFO 2025-12-07 10:45:17,945 consumers_webrtc WebRTC CONNECT success: Joined group webrtc_call_29 (user=sridhar)
-INFO 2025-12-07 10:45:18,185 consumers_webrtc WebRTC RECEIVE: call_id=29, type=offer, user=sridhar
-INFO 2025-12-07 10:45:18,189 consumers_webrtc WebRTC RECEIVE: call_id=29, type=ice-candidate, user=sridhar
-INFO 2025-12-07 10:45:18,191 consumers_webrtc WebRTC RECEIVE: call_id=29, type=ice-candidate, user=sridhar
-INFO 2025-12-07 10:45:18,193 consumers_webrtc WebRTC RECEIVE: call_id=29, type=ice-candidate, user=sridhar
-INFO 2025-12-07 10:45:18,194 consumers_webrtc WebRTC RECEIVE: call_id=29, type=ice-candidate, user=sridhar
+INFO 2025-12-07 14:55:47,358 cli Starting server at tcp:port=8001:interface=0.0.0.0
+INFO 2025-12-07 14:55:47,360 server HTTP/2 support not enabled (install the http2 and tls Twisted extras)
+INFO 2025-12-07 14:55:47,360 server Configuring endpoint tcp:port=8001:interface=0.0.0.0
+INFO 2025-12-07 14:55:47,361 server Listening on TCP address 0.0.0.0:8001

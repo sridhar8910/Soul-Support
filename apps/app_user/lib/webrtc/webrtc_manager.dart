@@ -4,9 +4,9 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'webrtc_signaling.dart';
 import 'webrtc_utils.dart';
 
-// Web-only imports for audio element
-import 'dart:html' as html show AudioElement, document;
-import 'dart:js_util' as js_util;
+// Web-only functionality - using dynamic types and runtime checks
+// Conditional imports are handled via kIsWeb checks
+// Note: Web-specific code is wrapped in kIsWeb checks to avoid compile errors on non-web platforms
 
 /// WebRTC connection manager
 class WebRTCManager {
@@ -18,7 +18,7 @@ class WebRTCManager {
   MediaStream? _remoteStream; // Store remote stream for audio playback
   
   // Web-only: hidden audio element for reliable audio playback
-  html.AudioElement? _webAudioElement;
+  dynamic _webAudioElement; // Using dynamic for platform compatibility
   bool _disposed = false; // Guard against operations after dispose
   
   final int callId;
@@ -31,7 +31,7 @@ class WebRTCManager {
   bool _isMuted = false;
   bool _isVideoEnabled = true;
   bool _isSpeakerEnabled = false;
-  
+
   // Track connection states
   RTCPeerConnectionState _peerConnectionState = RTCPeerConnectionState.RTCPeerConnectionStateNew;
   RTCIceConnectionState _iceConnectionState = RTCIceConnectionState.RTCIceConnectionStateNew;
@@ -479,10 +479,21 @@ class WebRTCManager {
     // Web-only: remove audio element
     if (kIsWeb && _webAudioElement != null) {
       try {
-        // Unset srcObject and remove element
-        js_util.setProperty(_webAudioElement!, 'srcObject', null);
-        _webAudioElement!.pause();
-        _webAudioElement!.remove();
+        // Unset srcObject and remove element (only on web)
+        // Using dynamic calls to avoid compile-time errors on non-web platforms
+        final element = _webAudioElement as dynamic;
+        if (element != null) {
+          // Try to set srcObject to null (web-only)
+          try {
+            element.srcObject = null;
+          } catch (_) {}
+          try {
+            element.pause();
+          } catch (_) {}
+          try {
+            element.remove();
+          } catch (_) {}
+        }
         print('[WebRTC] Removed web audio element');
       } catch (e) {
         print('[WebRTC] Error cleaning web audio element: $e');

@@ -1651,11 +1651,15 @@ class ApiClient {
   }
 
   Future<MoodUpdateResult> updateMood({
-    required int value,
+    required double value,
     String? timezone,
   }) async {
+    // Clamp value to 1.0-5.0 and round to 1 decimal place for half-point precision
+    final clampedValue = value.clamp(1.0, 5.0);
+    final roundedValue = (clampedValue * 2).round() / 2.0; // Round to nearest 0.5
+    
     final payload = <String, dynamic>{
-      'value': value.clamp(1, 5),
+      'value': roundedValue,
     };
     if (timezone != null && timezone.trim().isNotEmpty) {
       payload['timezone'] = timezone.trim();
@@ -1681,6 +1685,58 @@ class ApiClient {
 
     throw ApiClientException(
       'Unable to update mood: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get mood history with optional filtering
+  /// 
+  /// [days] - Number of days to retrieve (default: 30, max: 365)
+  /// [startDate] - Start date in YYYY-MM-DD format (optional)
+  /// [endDate] - End date in YYYY-MM-DD format (optional)
+  Future<Map<String, dynamic>> getMoodHistory({
+    int? days,
+    String? startDate,
+    String? endDate,
+  }) async {
+    final uri = Uri.parse('$base/mood/history/').replace(
+      queryParameters: <String, String>{
+        if (days != null) 'days': days.toString(),
+        if (startDate != null) 'start_date': startDate,
+        if (endDate != null) 'end_date': endDate,
+      },
+    );
+
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        uri,
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to fetch mood history: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get mood analytics and trends
+  Future<Map<String, dynamic>> getMoodAnalytics() async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/mood/analytics/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to fetch mood analytics: ${_extractErrorMessage(response)}',
     );
   }
 
@@ -2903,6 +2959,72 @@ class ApiClient {
 
     throw ApiClientException(
       'Unable to load call: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get call history (separated into active and history)
+  Future<Map<String, dynamic>> getCallHistory() async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/calls/history/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to load call history: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get list of all users the counsellor has called with (counsellors only)
+  Future<Map<String, dynamic>> getCounsellorUsersCallHistory() async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/counselor/users-call-history/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    if (response.statusCode == 403) {
+      throw ApiClientException('Only counsellors can access this endpoint');
+    }
+
+    throw ApiClientException(
+      'Unable to load users call history: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get call history for a specific user (counsellors only)
+  Future<Map<String, dynamic>> getUserCallHistoryForCounsellor(int userId) async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/counselor/users-call-history/$userId/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    if (response.statusCode == 403) {
+      throw ApiClientException('Only counsellors can access this endpoint');
+    }
+
+    if (response.statusCode == 404) {
+      throw ApiClientException('User not found');
+    }
+
+    throw ApiClientException(
+      'Unable to load user call history: ${_extractErrorMessage(response)}',
     );
   }
 

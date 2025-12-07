@@ -15,8 +15,10 @@ from .auth_views import (
 from .chat_views import (
     ChatAcceptView,
     ChatCreateView,
+    ChatFilteredListView,
     ChatListView,
     ChatMessageListView,
+    ChatTranscriptView,
     QueuedChatsView,
 )
 from .content_views import (
@@ -44,6 +46,10 @@ from .session_views import (
     QuickSessionView,
     SessionDurationView,
     SessionEndView,
+    SessionHistoryView,
+    SessionRatingCreateView,
+    SessionRatingDetailView,
+    SessionRatingListView,
     SessionStartView,
     SessionSummaryView,
     SessionUpdateView,
@@ -62,11 +68,17 @@ from .wallet_views import (
     WalletUsageView,
 )
 from .wellness_views import (
+    MyJournalDetailView,
+    MyJournalListCreateView,
     SupportGroupListView,
     WellnessJournalEntryDetailView,
     WellnessJournalEntryListCreateView,
     WellnessTaskDetailView,
     WellnessTaskListCreateView,
+)
+from .mood_views import (
+    MoodAnalyticsView,
+    MoodHistoryView,
 )
 from .assessment_views import (
     AssessmentDetailView,
@@ -92,6 +104,8 @@ __all__ = [
     "UserSettingsView",
     "DashboardView",
     "MoodUpdateView",
+    "MoodHistoryView",
+    "MoodAnalyticsView",
     # Wallet
     "WalletRechargeView",
     "WalletDetailView",
@@ -101,6 +115,8 @@ __all__ = [
     "WellnessTaskDetailView",
     "WellnessJournalEntryListCreateView",
     "WellnessJournalEntryDetailView",
+    "MyJournalListCreateView",
+    "MyJournalDetailView",
     "SupportGroupListView",
     # Sessions
     "UpcomingSessionListCreateView",
@@ -110,6 +126,10 @@ __all__ = [
     "SessionDurationView",
     "SessionUpdateView",
     "SessionSummaryView",
+    "SessionHistoryView",
+    "SessionRatingCreateView",
+    "SessionRatingListView",
+    "SessionRatingDetailView",
     "QuickSessionView",
     # Content
     "ReportsAnalyticsView",
@@ -132,9 +152,11 @@ __all__ = [
     # Chat
     "ChatCreateView",
     "ChatListView",
+    "ChatFilteredListView",
     "QueuedChatsView",
     "ChatAcceptView",
     "ChatMessageListView",
+    "ChatTranscriptView",
     # Assessment
     "AssessmentListView",
     "AssessmentDetailView",
