@@ -1,0 +1,106 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-soulsupport}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-2828}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:6-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./backend
+      dockerfile: ../Dockerfile
+    image: soulsupport_web:latest
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             daphne -b 0.0.0.0 -p 8000 core.asgi:application"
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/static
+      - media_volume:/app/media
+    expose:
+      - "8000"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:stable
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - static_volume:/app/static:ro
+      - media_volume:/app/media:ro
+      # If you have SSL certificates:
+      - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - web
+    networks:
+      - backend
+      - frontend
+
+  coturn:
+    image: instrumentisto/coturn:4.5.2
+    restart: unless-stopped
+    ports:
+      - "3478:3478"        # STUN/TURN TCP/UDP
+      - "3478:3478/udp"
+      - "5349:5349"        # TURN over TLS (if configured)
+      - "49152-65535:49152-65535/udp"  # TURN relay ports range
+    environment:
+      TURN_PORT: 3478
+      TURN_RELAY_IP: 0.0.0.0
+    volumes:
+      - ./deploy/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    networks:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume:
+
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
+

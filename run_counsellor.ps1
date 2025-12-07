@@ -53,52 +53,106 @@ Write-Host "Backend will run in background in this terminal." -ForegroundColor Y
 Write-Host "WebSocket support: ENABLED" -ForegroundColor Green
 Write-Host ""
 
+# Function to check if a port is available
+function Test-Port {
+    param([int]$Port)
+    $connection = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+    return ($connection -eq $null)
+}
+
+# Function to find an available port
+function Get-AvailablePort {
+    param([int[]]$PreferredPorts = @(8000, 8080, 9001 ))
+    foreach ($port in $PreferredPorts) {
+        if (Test-Port -Port $port) {
+            return $port
+        }
+    }
+    # If none available, find any free port
+    $tcpListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
+    $tcpListener.Start()
+    $freePort = ($tcpListener.LocalEndpoint).Port
+    $tcpListener.Stop()
+    return $freePort
+}
+
 # Check if port 8000 is already in use
 Write-Host "Checking for existing server on port 8000..." -ForegroundColor Cyan
-$existingProcesses = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+$port = 8000
+$existingProcesses = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 if ($existingProcesses) {
-    Write-Host "Found existing server(s) on port 8000. Stopping them..." -ForegroundColor Yellow
+    Write-Host "Found existing server(s) on port $port. Attempting to stop them..." -ForegroundColor Yellow
+    $stopped = $false
     $existingProcesses | ForEach-Object {
         try {
             $proc = Get-Process -Id $_ -ErrorAction SilentlyContinue
             if ($proc) {
-                Write-Host "  Stopping process: $($proc.ProcessName) (PID: $_)" -ForegroundColor Yellow
+                Write-Host "  Attempting to stop: $($proc.ProcessName) (PID: $_)" -ForegroundColor Yellow
                 Stop-Process -Id $_ -Force -ErrorAction Stop
+                $stopped = $true
             }
         } catch {
-            Write-Warning "  Could not stop process (PID: $_). You may need to stop it manually."
+            Write-Warning "  Could not stop process (PID: $_). Access denied or process protected."
         }
     }
     Start-Sleep -Seconds 2
-    Write-Host "Existing server(s) stopped." -ForegroundColor Green
+    
+    # Check if port is still in use
+    if (!(Test-Port -Port $port)) {
+        Write-Host "Port $port is still in use. Trying alternative ports..." -ForegroundColor Yellow
+        $port = Get-AvailablePort
+        Write-Host "Using port $port instead." -ForegroundColor Green
+    } else {
+        Write-Host "Existing server(s) stopped. Using port $port." -ForegroundColor Green
+    }
+} else {
+    Write-Host "Port $port is available." -ForegroundColor Green
 }
+
+$script:backendPort = $port
 
 # Set environment variable for unbuffered output
 [Environment]::SetEnvironmentVariable('PYTHONUNBUFFERED', '1', 'Process')
 
 # Start backend in background job
-Write-Host "Starting backend server..." -ForegroundColor Cyan
+Write-Host "Starting backend server on port $port..." -ForegroundColor Cyan
 $backendJob = Start-Job -ScriptBlock {
-    param($pythonExe, $backendPath)
+    param($pythonExe, $backendPath, $port)
     Set-Location $backendPath
-    & $pythonExe -m daphne core.asgi:application --bind 0.0.0.0 --port 8000 2>&1
-} -ArgumentList $pythonExe, $backendPath
+    & $pythonExe -m daphne core.asgi:application --bind 0.0.0.0 --port $port 2>&1
+} -ArgumentList $pythonExe, $backendPath, $port
 
 # Wait a moment for server to start
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 5
 
 # Check if backend started successfully
 $jobState = $backendJob.State
 if ($jobState -eq 'Running') {
-    Write-Host "Backend started successfully (Job ID: $($backendJob.Id))" -ForegroundColor Green
-    Write-Host "API: http://127.0.0.1:8000/api" -ForegroundColor Green
-    Write-Host "WebSocket: ws://127.0.0.1:8000/ws/chat/<chat_id>/" -ForegroundColor Green
+    # Verify the backend is actually responding
+    try {
+        $testUrl = "http://127.0.0.1:$port/api/health/"
+        $response = Invoke-WebRequest -Uri $testUrl -Method GET -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        if ($response.StatusCode -eq 200) {
+            Write-Host "Backend started successfully (Job ID: $($backendJob.Id))" -ForegroundColor Green
+            Write-Host "API: http://127.0.0.1:$port/api" -ForegroundColor Green
+            Write-Host "WebSocket: ws://127.0.0.1:$port/ws/chat/<chat_id>/" -ForegroundColor Green
+        } else {
+            Write-Warning "Backend started but health check returned status $($response.StatusCode)"
+        }
+    } catch {
+        Write-Warning "Backend process is running but not responding to requests."
+        Write-Warning "Check backend logs for errors. The app may still work if backend starts later."
+        Write-Host "API: http://127.0.0.1:$port/api" -ForegroundColor Yellow
+        Write-Host "WebSocket: ws://127.0.0.1:$port/ws/chat/<chat_id>/" -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "Backend job state: $jobState" -ForegroundColor Yellow
-    $output = Receive-Job -Job $backendJob
+    Write-Warning "Backend job state: $jobState"
+    $output = Receive-Job -Job $backendJob -ErrorAction SilentlyContinue
     if ($output) {
         Write-Host "Backend output: $output" -ForegroundColor Yellow
     }
+    Write-Host "Attempting to continue anyway..." -ForegroundColor Yellow
+    Write-Host "API: http://127.0.0.1:$port/api" -ForegroundColor Yellow
 }
 Write-Host ""
 

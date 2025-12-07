@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:common/api/api_client.dart';
 import 'package:common/widgets/widgets.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -11,6 +12,7 @@ class ForgotPasswordScreen extends StatefulWidget {
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final ApiClient _api = ApiClient();
   int _step = 0;
   final _emailFormKey = GlobalKey<FormState>();
   final _otpFormKey = GlobalKey<FormState>();
@@ -23,7 +25,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   bool _otpSent = false;
   bool _otpVerified = false;
-  static const String _mockOtp = '654321';
+  String? _resetToken;
+  bool _loading = false;
 
   bool _obscureNew = true;
   bool _obscureConfirm = true;
@@ -74,38 +77,92 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     return null;
   }
 
-  void _sendOtp() {
-    if (_emailFormKey.currentState!.validate()) {
+  Future<void> _sendOtp() async {
+    if (!(_emailFormKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _loading = true;
+    });
+
+    final (success, error) = await _api.sendPasswordResetOtp(
+      email: _emailCtrl.text.trim().toLowerCase(),
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _loading = false;
+    });
+
+    if (success) {
       setState(() {
         _otpSent = true;
         _step = 1;
       });
-      showSuccessSnackBar(context, 'OTP sent (demo code: 654321)');
+      showSuccessSnackBar(context, 'OTP sent to your email');
+    } else {
+      showErrorSnackBar(context, error ?? 'Failed to send OTP');
     }
   }
 
-  void _verifyOtp() {
-    if (_otpFormKey.currentState!.validate()) {
-      if (_otpCtrl.text.trim() == _mockOtp) {
-        setState(() {
-          _otpVerified = true;
-          _step = 2;
-        });
-        showSuccessSnackBar(context, 'OTP verified');
-      } else {
-        showErrorSnackBar(context, 'Invalid OTP');
-      }
+  Future<void> _verifyOtp() async {
+    if (!(_otpFormKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _loading = true;
+    });
+
+    final (success, error, token) = await _api.verifyPasswordResetOtp(
+      email: _emailCtrl.text.trim().toLowerCase(),
+      code: _otpCtrl.text.trim(),
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _loading = false;
+    });
+
+    if (success && token != null) {
+      setState(() {
+        _otpVerified = true;
+        _resetToken = token;
+        _step = 2;
+      });
+      showSuccessSnackBar(context, 'OTP verified');
+    } else {
+      showErrorSnackBar(context, error ?? 'Invalid OTP');
     }
   }
 
-  void _resetPassword() {
-    if (!_otpVerified) {
+  Future<void> _resetPassword() async {
+    if (!_otpVerified || _resetToken == null) {
       showErrorSnackBar(context, 'Verify OTP before resetting password');
       return;
     }
-    if (_resetFormKey.currentState!.validate()) {
-      showSuccessSnackBar(context, 'Password updated (demo)');
+    if (!(_resetFormKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _loading = true;
+    });
+
+    final (success, error) = await _api.resetPassword(
+      email: _emailCtrl.text.trim().toLowerCase(),
+      token: _resetToken!,
+      newPassword: _newPassCtrl.text,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _loading = false;
+    });
+
+    if (success) {
+      showSuccessSnackBar(context, 'Password updated successfully');
       Navigator.pop(context);
+    } else {
+      showErrorSnackBar(context, error ?? 'Failed to reset password');
     }
   }
 
@@ -125,19 +182,30 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 decoration: _fieldDecoration(
                   label: 'Email',
                   prefix: Icons.alternate_email_outlined,
-                  suffix: InkWell(
-                    onTap: _sendOtp,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      child: Text(
-                        'Send OTP',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w600,
+                  suffix: _loading && _step == 0
+                      ? const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : InkWell(
+                          onTap: _loading ? null : _sendOtp,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            child: Text(
+                              'Send OTP',
+                              style: TextStyle(
+                                color: _loading
+                                    ? Theme.of(context).disabledColor
+                                    : Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  ),
                 ),
                 validator: _validateEmail,
               ),
@@ -172,8 +240,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               ),
               const SizedBox(height: 16),
               FilledButton(
-                onPressed: _verifyOtp,
-                child: const Text('Verify OTP'),
+                onPressed: _loading ? null : _verifyOtp,
+                child: _loading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Verify OTP'),
               ),
               const SizedBox(height: 8),
               Row(
@@ -181,11 +255,13 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 children: [
                   const Text("Didn't receive any code? "),
                   InkWell(
-                    onTap: _sendOtp,
+                    onTap: _loading ? null : _sendOtp,
                     child: Text(
                       'Resend Code',
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
+                        color: _loading
+                            ? Theme.of(context).disabledColor
+                            : Theme.of(context).colorScheme.primary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -236,9 +312,15 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               ),
               const SizedBox(height: 16),
               FilledButton.icon(
-                onPressed: _resetPassword,
-                icon: const Icon(Icons.check_circle_outline),
-                label: const Text('Update password'),
+                onPressed: _loading ? null : _resetPassword,
+                icon: _loading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check_circle_outline),
+                label: Text(_loading ? 'Updating...' : 'Update password'),
               ),
             ],
           ),

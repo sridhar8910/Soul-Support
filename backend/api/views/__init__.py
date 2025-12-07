@@ -4,6 +4,9 @@ This allows existing imports to continue working.
 """
 from .auth_views import (
     EmailOrUsernameTokenObtainPairView,
+    PasswordResetSendOTPView,
+    PasswordResetVerifyOTPView,
+    PasswordResetView,
     RegisterView,
     RegistrationSendOTPView,
     RegistrationVerifyOTPView,
@@ -65,11 +68,22 @@ from .wellness_views import (
     WellnessTaskDetailView,
     WellnessTaskListCreateView,
 )
+from .assessment_views import (
+    AssessmentDetailView,
+    AssessmentListView,
+    AssessmentResultDetailView,
+    AssessmentResultsListView,
+    AssessmentSubmitView,
+)
 
 __all__ = [
     # Auth
     "RegisterView",
     "RegistrationSendOTPView",
+    "RegistrationVerifyOTPView",
+    "PasswordResetSendOTPView",
+    "PasswordResetVerifyOTPView",
+    "PasswordResetView",
     "RegistrationVerifyOTPView",
     "EmailOrUsernameTokenObtainPairView",
     "TokenRefreshView",
@@ -121,5 +135,11 @@ __all__ = [
     "QueuedChatsView",
     "ChatAcceptView",
     "ChatMessageListView",
+    # Assessment
+    "AssessmentListView",
+    "AssessmentDetailView",
+    "AssessmentSubmitView",
+    "AssessmentResultsListView",
+    "AssessmentResultDetailView",
 ]
 

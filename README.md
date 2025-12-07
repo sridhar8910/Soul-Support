@@ -2,6 +2,25 @@
 
 A comprehensive mental health and wellness application built with Django REST Framework backend and Flutter mobile/desktop frontend. The platform provides counselling services, mood tracking, wellness tasks, journaling, meditation sessions, and professional guidance resources.
 
+## 📚 Documentation
+
+### Quick Start
+**👉 [COMPLETE_GUIDE.md](COMPLETE_GUIDE.md)** - **Start here!** Everything you need to get started: setup, running, WebRTC, testing, deployment, troubleshooting.
+
+### Reference Documentation
+- **[MULTI_APP_ARCHITECTURE.md](MULTI_APP_ARCHITECTURE.md)** - Multi-app architecture patterns, CI/CD, deployment strategies, version management (1591 lines - comprehensive reference)
+- **[PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md)** - Detailed technical documentation: code architecture, algorithms, Android build config, package upgrade plans (1285 lines - technical reference)
+- **[BILLING_IMPLEMENTATION.md](BILLING_IMPLEMENTATION.md)** - Chat billing feature: implementation details, API changes, database schema (214 lines - feature-specific)
+
+### When to Use Each Document
+
+| Document | Use When |
+|----------|----------|
+| **COMPLETE_GUIDE.md** | Getting started, daily development, quick reference |
+| **MULTI_APP_ARCHITECTURE.md** | Understanding multi-app patterns, setting up CI/CD, deployment planning |
+| **PROJECT_DOCUMENTATION.md** | Deep technical details, code architecture, build configuration |
+| **BILLING_IMPLEMENTATION.md** | Working on billing features, understanding chat billing logic |
+
 ## 📋 Table of Contents
 
 - [Project Overview](#project-overview)

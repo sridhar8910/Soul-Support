@@ -1,5 +1,7 @@
 # Chat Billing Implementation
 
+> **Quick Start:** For general project info, see [COMPLETE_GUIDE.md](../COMPLETE_GUIDE.md)
+
 ## Overview
 Implemented **time-based billing** for chat sessions at **1 rupee per minute** of active conversation time. Money is automatically deducted from the user's wallet when the chat ends.
 

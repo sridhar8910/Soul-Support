@@ -56,16 +56,44 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 ASGI_APPLICATION = "core.asgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "soulsupport",
-        "USER": "postgres",
-        "PASSWORD": "2828",
-        "HOST": "localhost",
-        "PORT": "5432",
+# Database configuration
+# For Docker: Use postgres service name
+# For local: Use localhost
+# Auto-detect: Try postgres host first (Docker), fallback to localhost
+import socket
+
+def is_docker():
+    """Check if running in Docker by trying to resolve 'postgres' hostname."""
+    try:
+        socket.gethostbyname('postgres')
+        return True
+    except socket.gaierror:
+        return False
+
+if is_docker():
+    # Running in Docker - use postgres service
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "soulsupport",
+            "USER": "postgres",
+            "PASSWORD": "2828",
+            "HOST": "postgres",
+            "PORT": "5432",
+        }
     }
-}
+else:
+    # Local development configuration
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "soulsupport",
+            "USER": "postgres",
+            "PASSWORD": "2828",
+            "HOST": "localhost",
+            "PORT": "5432",
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS: list[dict[str, str]] = []
 
@@ -131,9 +159,8 @@ CORS_ALLOW_HEADERS = [
 # EMAIL_HOST_PASSWORD = os.environ.get("SENDGRID_PASSWORD")
 # EMAIL_USE_TLS = True
 # --- Email Configuration ---
-# For development: Use console backend to see OTPs in terminal
-# For production: Use SMTP backend with proper credentials
-USE_CONSOLE_EMAIL = os.environ.get('USE_CONSOLE_EMAIL', 'false').lower() == 'true'
+# Set to True for development (console) or False for production (SMTP)
+USE_CONSOLE_EMAIL = False  # Change to True to see OTPs in terminal
 
 if USE_CONSOLE_EMAIL:
     # Development: Print emails to console (useful for debugging)
@@ -164,13 +191,35 @@ EMAIL_PAGE_TEMPLATE = 'email_verification.html'
 EMAIL_PAGE_DOMAIN = 'http://localhost:8000'
 
 # Channels (WebSocket) configuration
-# Using in-memory channel layer for development (no Redis required)
-# For production, switch to Redis: "channels_redis.core.RedisChannelLayer"
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
-    },
-}
+# Auto-detect Docker and use Redis if available, otherwise use InMemory
+
+def is_redis_available():
+    """Check if Redis is available by trying to connect."""
+    try:
+        import redis
+        r = redis.Redis(host='redis' if is_docker() else 'localhost', port=6379, db=0, socket_connect_timeout=1)
+        r.ping()
+        return True
+    except:
+        return False
+
+if is_docker() and is_redis_available():
+    # Docker: Use Redis channel layer
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [("redis", 6379)],
+            },
+        },
+    }
+else:
+    # Local development: Use in-memory channel layer (no Redis required)
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
 
 # Logging configuration - ALL logs to terminal/console ONLY (no files)
 LOGGING = {

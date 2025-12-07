@@ -2,6 +2,11 @@ from django.urls import path
 # TokenRefreshView is now imported from views
 
 from .views import (
+    AssessmentDetailView,
+    AssessmentListView,
+    AssessmentResultDetailView,
+    AssessmentResultsListView,
+    AssessmentSubmitView,
     ChatAcceptView,
     ChatCreateView,
     ChatListView,
@@ -22,6 +27,9 @@ from .views import (
     MindCareBoosterListView,
     MoodUpdateView,
     MusicTrackListView,
+    PasswordResetSendOTPView,
+    PasswordResetVerifyOTPView,
+    PasswordResetView,
     ProfessionalGuidanceListView,
     ProfileView,
     QueuedChatsView,
@@ -49,12 +57,24 @@ from .views import (
     WellnessTaskListCreateView,
 )
 from .views.health_views import HealthCheckView
+from .views.call_views import (
+    CallAcceptView,
+    CallDetailView,
+    CallListView,
+    QueuedCallsView,
+    end_call_view,
+    get_turn_credentials_view,
+    create_call_view,
+)
 
 urlpatterns = [
     path("health/", HealthCheckView.as_view()),
     path("auth/register/", RegisterView.as_view()),
     path("auth/send-otp/", RegistrationSendOTPView.as_view()),
     path("auth/verify-otp/", RegistrationVerifyOTPView.as_view()),
+    path("auth/send-password-reset-otp/", PasswordResetSendOTPView.as_view()),
+    path("auth/verify-password-reset-otp/", PasswordResetVerifyOTPView.as_view()),
+    path("auth/password-reset/", PasswordResetView.as_view()),
     path("auth/token/", EmailOrUsernameTokenObtainPairView.as_view()),
     path("auth/token/refresh/", TokenRefreshView.as_view()),
     path("profile/", ProfileView.as_view()),
@@ -99,5 +119,19 @@ urlpatterns = [
     path("chats/list/", ChatListView.as_view()),
     path("chats/<int:chat_id>/accept/", ChatAcceptView.as_view()),
     path("chats/<int:chat_id>/messages/", ChatMessageListView.as_view()),
+    # WebRTC/Call endpoints
+    path("calls/create/", create_call_view, name="create_call"),
+    path("calls/turn-credentials/", get_turn_credentials_view, name="turn_credentials"),
+    path("calls/", CallListView.as_view(), name="call_list"),
+    path("calls/<int:pk>/", CallDetailView.as_view(), name="call_detail"),
+    path("calls/<int:call_id>/accept/", CallAcceptView.as_view(), name="call_accept"),
+    path("calls/<int:call_id>/end/", end_call_view, name="end_call"),
+    path("calls/queued/", QueuedCallsView.as_view(), name="queued_calls"),
+    # Assessment endpoints
+    path("assessments/", AssessmentListView.as_view()),
+    path("assessments/<int:pk>/", AssessmentDetailView.as_view()),
+    path("assessments/<int:assessment_id>/submit/", AssessmentSubmitView.as_view()),
+    path("assessments/results/", AssessmentResultsListView.as_view()),
+    path("assessments/results/<int:pk>/", AssessmentResultDetailView.as_view()),
 ]
 

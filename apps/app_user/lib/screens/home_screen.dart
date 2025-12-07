@@ -26,6 +26,7 @@ import 'music_page.dart';
 import 'history_center_page.dart';
 import 'support_groups_page.dart';
 import 'upcoming_sessions_page.dart';
+import 'video_call_screen.dart';
 import 'wallet_page.dart';
 import 'wellness_journal_page.dart';
 import 'wellness_plan_page.dart';
@@ -1471,6 +1472,7 @@ class _QuickCard extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(12),
@@ -1480,23 +1482,29 @@ class _QuickCard extends StatelessWidget {
                 ),
                 child: Icon(
                   icon,
-                  size: 32,
+                  size: 28,
                   color: iconColor ?? _Palette.accent,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Text(
                 title,
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: _Palette.text,
                 ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
               Text(
                 subtitle,
-                style: const TextStyle(fontSize: 13, color: _Palette.subtext),
+                style: const TextStyle(fontSize: 12, color: _Palette.subtext),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
               ),
             ],
           ),
@@ -1867,6 +1875,11 @@ class _ChatWithCounsellorPageState extends State<ChatWithCounsellorPage>
   int _currentQuestionIndex = 0;
   bool _checkingExistingChat = true;
   Map<String, dynamic>? _activeChat;
+  
+  // Wallet-related fields
+  int _walletAmount = 0;
+  bool _walletLoading = false;
+  Map<String, int> _walletMinimums = const {"call": 100, "chat": 50};
   final List<Question> _questions = [
     Question(
       text: 'What type of concern are you experiencing?',
@@ -1932,6 +1945,58 @@ class _ChatWithCounsellorPageState extends State<ChatWithCounsellorPage>
         setState(() => _showGreeting = false);
       }
     });
+    // Load wallet balance on init
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadWalletBalance();
+    });
+  }
+
+  Future<void> _loadWalletBalance() async {
+    if (_walletLoading) return;
+    setState(() {
+      _walletLoading = true;
+    });
+    try {
+      final wallet = await _api.getWallet();
+      if (!mounted) return;
+      final oldAmount = _walletAmount;
+      setState(() {
+        _walletAmount = wallet.amount;
+        _walletMinimums = wallet.minimumBalance;
+      });
+      // Log balance change for debugging
+      if (oldAmount != _walletAmount) {
+        appLogger.info('Wallet balance updated: ₹$oldAmount -> ₹${_walletAmount}');
+      }
+    } on ApiClientException catch (error) {
+      appLogger.error('Wallet load failed: ${error.message}');
+      if (mounted) {
+        setState(() {
+          _walletAmount = 0;
+        });
+      }
+    } catch (error) {
+      appLogger.error('Failed to load wallet', error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _walletLoading = false;
+        });
+      }
+    }
+  }
+
+  void _openWallet() async {
+    // Always refresh wallet before opening wallet page to ensure latest balance
+    await _loadWalletBalance();
+    
+    await Navigator.push<int>(
+      context,
+      MaterialPageRoute(builder: (_) => const WalletPage()),
+    );
+    if (!mounted) return;
+    // Always refresh wallet after returning from wallet page
+    await _loadWalletBalance();
   }
 
   Future<void> _checkForExistingChat() async {
@@ -2513,8 +2578,35 @@ class _ChatWithCounsellorPageState extends State<ChatWithCounsellorPage>
     }
   }
 
-  void _startCall() {
-    showDialog<void>(
+  Future<void> _startCall() async {
+    // Check wallet balance
+    final minCallBalance = _walletMinimums['call'] ?? 100;
+    if (_walletAmount < minCallBalance) {
+      showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Low Balance'),
+          content: Text(
+              "You need at least ₹$minCallBalance to start a call. Please recharge to continue."),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _openWallet();
+              },
+              child: const Text('Recharge'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Show call type selection dialog
+    final callType = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -2523,31 +2615,68 @@ class _ChatWithCounsellorPageState extends State<ChatWithCounsellorPage>
           children: [
             Icon(Icons.phone, color: _Palette.primary),
             SizedBox(width: 8),
-            Text('Call Counsellor'),
+            Text('Start Call'),
           ],
         ),
         content: const Text(
-          'A counsellor will call you shortly. Please make sure you\'re in a comfortable and private space.',
+          'Select call type:',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              showSuccessSnackBar(context, 'Call initiated (demo mode)');
-            },
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, 'voice'),
+            icon: const Icon(Icons.phone),
+            label: const Text('Voice Call'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, 'video'),
+            icon: const Icon(Icons.videocam),
+            label: const Text('Video Call'),
             style: ElevatedButton.styleFrom(
               backgroundColor: _Palette.primary,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Start Call'),
           ),
         ],
       ),
     );
+
+    if (callType == null) return;
+
+    try {
+      // Create call via API
+      final callData = await _api.createCall(
+        callType: callType,
+      );
+
+      if (!mounted) return;
+
+      // Navigate to video/audio call screen
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VideoCallScreen(
+            callId: callData['call_id'] as int,
+            counsellorName: null, // Will be set when counsellor joins
+            isVideoCall: callType == 'video',
+          ),
+        ),
+      );
+
+      // Refresh wallet after call ends
+      await _loadWalletBalance();
+    } catch (e) {
+      if (mounted) {
+        showErrorSnackBar(context, 'Failed to start call: ${e.toString()}');
+      }
+    }
   }
 
   Future<void> _sendMessage() async {

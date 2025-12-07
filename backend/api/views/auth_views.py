@@ -18,6 +18,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from ..models import EmailOTP
 from ..serializers import (
     EmailOrUsernameTokenObtainPairSerializer,
+    PasswordResetSendOTPSerializer,
+    PasswordResetVerifyOTPSerializer,
     RegisterSerializer,
     SendOTPSerializer,
     VerifyOTPSerializer,
@@ -209,3 +211,163 @@ class TokenRefreshView(BaseTokenRefreshView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
+class PasswordResetSendOTPView(APIView):
+    """Send OTP for password reset."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetSendOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        # Check if user exists
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            # Don't reveal if email exists for security
+            logger.info("Password reset requested for non-existent email: %s", email)
+            return Response(
+                {"status": "sent", "message": "If the email exists, an OTP has been sent."},
+                status=status.HTTP_200_OK
+            )
+
+        with transaction.atomic():
+            # Delete existing password reset OTPs for this email
+            EmailOTP.objects.filter(
+                email=email, 
+                purpose=EmailOTP.PURPOSE_PASSWORD_RESET
+            ).delete()
+            
+            code = f"{secrets.randbelow(1_000_000):06d}"
+            token = secrets.token_urlsafe(32)
+            otp = EmailOTP.objects.create(
+                email=email,
+                code=code,
+                purpose=EmailOTP.PURPOSE_PASSWORD_RESET,
+                token=token,
+                expires_at=timezone.now() + timezone.timedelta(minutes=10),
+            )
+
+        logger.info("Password reset OTP for %s is %s", email, code)
+        print(f"[OTP] Password reset code for {email}: {code}")
+
+        # Send email asynchronously
+        def send_email_async():
+            try:
+                from django.conf import settings
+                from django.db import connections
+                connections.close_all()
+                
+                from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'python.nexnoratech@gmail.com')
+                
+                logger.info("Attempting to send password reset OTP email to %s", email)
+                print(f"[OTP] Sending password reset email to {email}")
+                
+                result = send_mail(
+                    subject="Soul Support - Password Reset Code",
+                    message=f"Your password reset code is: {otp.code}. It expires in 10 minutes. If you didn't request this, please ignore this email.",
+                    from_email=from_email,
+                    recipient_list=[email],
+                    fail_silently=False,
+                )
+
+                logger.info("Password reset OTP email sent successfully to %s", email)
+                print(f"[OTP] Password reset email sent successfully to {email}")
+                
+            except Exception as e:
+                error_msg = f"Failed to send password reset OTP email to {email}: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                print(f"[OTP ERROR] {error_msg}")
+            finally:
+                from django.db import connections
+                connections.close_all()
+
+        email_thread = threading.Thread(target=send_email_async, daemon=True)
+        email_thread.start()
+        
+        return Response({"status": "sent", "message": "If the email exists, an OTP has been sent."})
+
+
+class PasswordResetVerifyOTPView(APIView):
+    """Verify OTP for password reset."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetVerifyOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        otp: EmailOTP = serializer.validated_data["otp"]
+        
+        # Ensure this is a password reset OTP
+        if otp.purpose != EmailOTP.PURPOSE_PASSWORD_RESET:
+            return Response(
+                {"error": "Invalid OTP purpose. This OTP is not for password reset."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        otp.mark_verified()
+        return Response({"status": "verified", "token": otp.token})
+
+
+class PasswordResetView(APIView):
+    """Reset password using verified OTP token."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request: Request) -> Response:
+        token = request.data.get("token")
+        new_password = request.data.get("password")
+        email = request.data.get("email")
+
+        if not token or not new_password or not email:
+            return Response(
+                {"error": "token, password, and email are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if len(new_password) < 8:
+            return Response(
+                {"error": "Password must be at least 8 characters long"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            otp = EmailOTP.objects.get(
+                token=token,
+                email__iexact=email,
+                purpose=EmailOTP.PURPOSE_PASSWORD_RESET,
+                is_verified=True
+            )
+        except EmailOTP.DoesNotExist:
+            return Response(
+                {"error": "Invalid or expired token"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if otp.is_expired:
+            return Response(
+                {"error": "Token has expired. Please request a new password reset."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Reset password
+        user.set_password(new_password)
+        user.save()
+
+        # Delete the OTP after successful password reset
+        otp.delete()
+
+        logger.info("Password reset successful for user %s", user.username)
+        
+        return Response({
+            "status": "success",
+            "message": "Password has been reset successfully. You can now login with your new password."
+        })

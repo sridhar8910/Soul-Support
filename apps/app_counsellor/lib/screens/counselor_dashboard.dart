@@ -9,6 +9,7 @@ import 'profile_setup_screen.dart';
 import 'appointments_screen.dart';
 import 'chat_session_screen.dart';
 import 'queued_chats_screen.dart';
+import 'queued_calls_screen.dart';
 import 'audio_call_screen.dart';
 import 'availability_screen.dart';
 import 'client_records_screen.dart';
@@ -32,6 +33,7 @@ class _CounselorDashboardState extends State<CounselorDashboard> {
   Map<String, dynamic>? _stats;
   int pendingVerifications = 0;
   int queuedChats = 0;
+  int? _queuedCallsCount;
   Map<String, dynamic>? _nextClientInfo;
   List<Map<String, dynamic>> _queuedChatsList = [];
   Timer? _refreshTimer;
@@ -87,6 +89,19 @@ class _CounselorDashboardState extends State<CounselorDashboard> {
         // Continue with empty list - don't break the whole dashboard
       }
 
+      // Load queued calls with error handling
+      int queuedCallsCount = 0;
+      try {
+        print('[Dashboard] Fetching queued calls from API...');
+        final queuedCallsData = await _api.getQueuedCalls();
+        queuedCallsCount = queuedCallsData.length;
+        print('[Dashboard] Queued calls loaded successfully: $queuedCallsCount');
+      } catch (e, stackTrace) {
+        print('[Dashboard] Error loading queued calls: $e');
+        print('[Dashboard] Stack trace: $stackTrace');
+        // Continue with 0 - don't break the whole dashboard
+      }
+
       if (!mounted) return;
 
       // Convert profile data to Counselor model
@@ -122,6 +137,7 @@ class _CounselorDashboardState extends State<CounselorDashboard> {
       // Always use actual API response length for accuracy
       queuedChats = queuedChatsData.length;
       _queuedChatsList = queuedChatsData;
+      _queuedCallsCount = queuedCallsCount;
       print('[Dashboard] Queued chats count: $queuedChats (from API: ${queuedChatsData.length}, from stats: ${statsData['queued_chats']})');
 
       // Extract client info from the next upcoming session or queued chat
@@ -636,11 +652,25 @@ class _CounselorDashboardState extends State<CounselorDashboard> {
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: _buildStatCard(
-            'Pending Tasks',
-            '$pendingVerifications',
-            Icons.assignment_outlined,
-            Colors.orange,
+          child: InkWell(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const QueuedCallsScreen(),
+                ),
+              ).then((_) {
+                // Refresh data when returning
+                _loadData();
+              });
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: _buildStatCard(
+              'Queued Calls',
+              '${_queuedCallsCount ?? 0}',
+              Icons.phone_outlined,
+              Colors.red,
+            ),
           ),
         ),
       ],

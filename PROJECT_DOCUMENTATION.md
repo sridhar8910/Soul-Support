@@ -1,6 +1,9 @@
-# SoulSupport Multi-App Project - Complete Documentation
+# SoulSupport Multi-App Project - Technical Documentation
 
-This comprehensive guide consolidates all project documentation including setup, running, troubleshooting, code architecture, and maintenance.
+> **Quick Start:** For getting started, see [COMPLETE_GUIDE.md](../COMPLETE_GUIDE.md)  
+> **Architecture:** For multi-app patterns, see [MULTI_APP_ARCHITECTURE.md](../MULTI_APP_ARCHITECTURE.md)
+
+This document provides detailed technical documentation including code architecture, algorithms, build configuration, and package management.
 
 ---
 

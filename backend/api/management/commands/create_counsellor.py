@@ -38,12 +38,31 @@ class Command(BaseCommand):
             )
             user = User.objects.get(username=username)
             
+            # Update email if provided
+            if user.email != email:
+                user.email = email
+                user.save()
+                self.stdout.write(
+                    self.style.SUCCESS(f'Updated email to "{email}".')
+                )
+            
+            # Update password
+            user.set_password(password)
+            user.save()
+            self.stdout.write(
+                self.style.SUCCESS(f'Updated password for user "{username}".')
+            )
+            
             # Ensure user is active
             if not user.is_active:
                 user.is_active = True
                 user.save()
                 self.stdout.write(
                     self.style.SUCCESS(f'Activated user "{username}".')
+                )
+            else:
+                self.stdout.write(
+                    self.style.SUCCESS(f'User "{username}" is already active.')
                 )
             
             # Check if counsellor profile exists
@@ -53,10 +72,14 @@ class Command(BaseCommand):
                         f'Counsellor user "{username}" already exists with profile.'
                     )
                 )
-                self.stdout.write(f'Username: {username}')
-                self.stdout.write(f'Email: {user.email}')
-                self.stdout.write(f'is_active: {user.is_active}')
-                self.stdout.write(f'Password: (use existing password or reset it)')
+                # Ensure profile is available
+                profile = user.counsellorprofile
+                if not profile.is_available:
+                    profile.is_available = True
+                    profile.save()
+                    self.stdout.write(
+                        self.style.SUCCESS(f'Set counselor profile as available.')
+                    )
             else:
                 # Create counsellor profile for existing user
                 CounsellorProfile.objects.create(
@@ -69,10 +92,11 @@ class Command(BaseCommand):
                         f'Created counsellor profile for existing user "{username}".'
                     )
                 )
-                self.stdout.write(f'Username: {username}')
-                self.stdout.write(f'Email: {user.email}')
-                self.stdout.write(f'is_active: {user.is_active}')
-                self.stdout.write(f'Password: (use existing password)')
+            
+            self.stdout.write(f'Username: {username}')
+            self.stdout.write(f'Email: {user.email}')
+            self.stdout.write(f'is_active: {user.is_active}')
+            self.stdout.write(f'Password: {password}')
         else:
             # Create new user with is_active=True
             user = User.objects.create_user(

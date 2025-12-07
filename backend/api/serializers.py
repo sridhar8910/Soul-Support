@@ -4,6 +4,10 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (
+    Assessment,
+    AssessmentQuestion,
+    AssessmentResult,
+    Call,
     Chat,
     ChatMessage,
     CounsellorProfile,
@@ -346,6 +350,7 @@ class ChatMessageCreateSerializer(serializers.Serializer):
 
 
 class SendOTPSerializer(serializers.Serializer):
+    """Serializer for sending registration OTP."""
     email = serializers.EmailField()
 
     def validate_email(self, value):
@@ -356,6 +361,7 @@ class SendOTPSerializer(serializers.Serializer):
 
 
 class VerifyOTPSerializer(serializers.Serializer):
+    """Serializer for verifying registration OTP."""
     email = serializers.EmailField()
     code = serializers.CharField(min_length=6, max_length=6)
 
@@ -366,6 +372,42 @@ class VerifyOTPSerializer(serializers.Serializer):
         otp = qs.first()
         if not otp:
             raise serializers.ValidationError({"email": "No OTP request found for this email."})
+        if otp.is_expired:
+            raise serializers.ValidationError({"code": "OTP has expired. Please request a new one."})
+        if otp.attempts >= 5:
+            raise serializers.ValidationError({"code": "Too many attempts. Please request a new OTP."})
+        if otp.code != code:
+            otp.attempts += 1
+            otp.save(update_fields=["attempts"])
+            raise serializers.ValidationError({"code": "Incorrect OTP code."})
+
+        attrs["otp"] = otp
+        return attrs
+
+
+class PasswordResetSendOTPSerializer(serializers.Serializer):
+    """Serializer for sending password reset OTP."""
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+
+class PasswordResetVerifyOTPSerializer(serializers.Serializer):
+    """Serializer for verifying password reset OTP."""
+    email = serializers.EmailField()
+    code = serializers.CharField(min_length=6, max_length=6)
+
+    def validate(self, attrs):
+        email = attrs["email"].strip().lower()
+        code = attrs["code"].strip()
+        qs = EmailOTP.objects.filter(
+            email__iexact=email, 
+            purpose=EmailOTP.PURPOSE_PASSWORD_RESET
+        ).order_by("-created_at")
+        otp = qs.first()
+        if not otp:
+            raise serializers.ValidationError({"email": "No password reset OTP request found for this email."})
         if otp.is_expired:
             raise serializers.ValidationError({"code": "OTP has expired. Please request a new one."})
         if otp.attempts >= 5:
@@ -530,6 +572,112 @@ class CounsellorAppointmentSerializer(serializers.ModelSerializer):
         if hasattr(obj.user, 'profile') and obj.user.profile.full_name:
             return obj.user.profile.full_name
         return obj.user.username
+
+
+class AssessmentSerializer(serializers.ModelSerializer):
+    """Serializer for Assessment model."""
+    
+    class Meta:
+        model = Assessment
+        fields = (
+            "id",
+            "title",
+            "description",
+            "category",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class AssessmentSubmissionSerializer(serializers.Serializer):
+    """Serializer for assessment submission."""
+    
+    answers = serializers.JSONField(
+        help_text="Dictionary mapping question_id to answer"
+    )
+    
+    def validate_answers(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Answers must be a dictionary")
+        return value
+
+
+class AssessmentResultSerializer(serializers.ModelSerializer):
+    """Serializer for AssessmentResult model."""
+    
+    assessment_title = serializers.CharField(source='assessment.title', read_only=True)
+    
+    class Meta:
+        model = AssessmentResult
+        fields = (
+            "id",
+            "user",
+            "assessment",
+            "assessment_title",
+            "answers",
+            "total_score",
+            "result_category",
+            "recommendations",
+            "created_at",
+        )
+        read_only_fields = (
+            "id",
+            "user",
+            "total_score",
+            "result_category",
+            "recommendations",
+            "created_at",
+        )
+
+
+class CallSerializer(serializers.ModelSerializer):
+    """Serializer for Call model."""
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    counsellor_username = serializers.CharField(source='counsellor.username', read_only=True, allow_null=True)
+    duration_formatted = serializers.CharField(read_only=True)
+    
+    class Meta:
+        model = Call
+        fields = (
+            'id',
+            'user',
+            'user_username',
+            'counsellor',
+            'counsellor_username',
+            'call_type',
+            'status',
+            'scheduled_at',
+            'started_at',
+            'ended_at',
+            'duration_seconds',
+            'duration_formatted',
+            'notes',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = (
+            'id',
+            'started_at',
+            'ended_at',
+            'duration_seconds',
+            'created_at',
+            'updated_at',
+        )
+
+
+class CallAcceptSerializer(serializers.Serializer):
+    """Serializer for accepting a call."""
+    pass  # No fields needed, just updates the call
+
+
+class CallUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating call notes."""
+    
+    class Meta:
+        model = Call
+        fields = ('notes',)
 
 
 class CounsellorStatsSerializer(serializers.Serializer):

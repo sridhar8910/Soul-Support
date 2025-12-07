@@ -977,8 +977,8 @@ class ApiClient {
   static String? _detectedBase;
   static bool _isDetecting = false;
   
-  // Common ports to try for auto-detection
-  static const List<int> _commonPorts = [8000, 8001, 8002, 8003];
+  // Common ports to try for auto-detection (matches run_counsellor.ps1)
+  static const List<int> _commonPorts = [8000, 8080, 9001, 8001, 8002, 8003];
   
   static String get base {
     // If explicitly set via environment variable, use it
@@ -1315,6 +1315,123 @@ class ApiClient {
       false,
       _errorFromResponse(response, fallback: 'Registration failed')
     );
+  }
+
+  /// Send password reset OTP to email
+  Future<(bool, String?)> sendPasswordResetOtp({required String email}) async {
+    await _ensurePortDetected();
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$base/auth/send-password-reset-otp/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email}),
+      ).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return (true, null);
+      }
+
+      return (
+        false,
+        _errorFromResponse(response, fallback: 'Failed to send password reset OTP')
+      );
+    } on TimeoutException {
+      return (false, 'Request timed out. Please check your connection and try again.');
+    } on SocketException {
+      return (false, 'Network error. Please check your internet connection.');
+    } catch (e) {
+      return (false, 'Failed to send password reset OTP: ${e.toString()}');
+    }
+  }
+
+  /// Verify password reset OTP
+  Future<(bool, String?, String?)> verifyPasswordResetOtp({
+    required String email,
+    required String code,
+  }) async {
+    await _ensurePortDetected();
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$base/auth/verify-password-reset-otp/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email, 'code': code}),
+      ).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
+
+      if (response.statusCode == 200) {
+        try {
+          final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+          final token = decoded['token'] as String?;
+          return (true, null, token);
+        } catch (_) {
+          return (true, null, null);
+        }
+      }
+
+      return (
+        false,
+        _errorFromResponse(response, fallback: 'OTP verification failed'),
+        null
+      );
+    } on TimeoutException {
+      return (false, 'Request timed out. Please check your connection and try again.', null);
+    } on SocketException {
+      return (false, 'Network error. Please check your internet connection.', null);
+    } catch (e) {
+      return (false, 'OTP verification failed: ${e.toString()}', null);
+    }
+  }
+
+  /// Reset password using verified OTP token
+  Future<(bool, String?)> resetPassword({
+    required String email,
+    required String token,
+    required String newPassword,
+  }) async {
+    await _ensurePortDetected();
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$base/auth/password-reset/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'email': email,
+          'token': token,
+          'password': newPassword,
+        }),
+      ).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return (true, null);
+      }
+
+      return (
+        false,
+        _errorFromResponse(response, fallback: 'Password reset failed')
+      );
+    } on TimeoutException {
+      return (false, 'Request timed out. Please check your connection and try again.');
+    } on SocketException {
+      return (false, 'Network error. Please check your internet connection.');
+    } catch (e) {
+      return (false, 'Password reset failed: ${e.toString()}');
+    }
   }
 
   Future<(bool, String?)> login(String username, String password) async {
@@ -2646,8 +2763,161 @@ class ApiClient {
     );
   }
 
+  // WebRTC/Call methods
+  Future<Map<String, dynamic>> getTurnCredentials() async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/calls/turn-credentials/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to get TURN credentials: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  Future<Map<String, dynamic>> createCall({
+    required String callType, // 'video' or 'voice'
+    int? counsellorId,
+  }) async {
+    final payload = <String, dynamic>{
+      'call_type': callType,
+    };
+    if (counsellorId != null) {
+      payload['counsellor_id'] = counsellorId;
+    }
+
+    final response = await _sendAuthorized(
+      (access) => http.post(
+        Uri.parse('$base/calls/create/'),
+        headers: _headers(access, {'Content-Type': 'application/json'}),
+        body: jsonEncode(payload),
+      ),
+    );
+
+    if (response.statusCode == 201) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to create call: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get list of calls for current user
+  Future<List<Map<String, dynamic>>> getCalls() async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/calls/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body) as List<dynamic>;
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    }
+
+    throw ApiClientException(
+      'Unable to load calls: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get queued calls (for counsellors)
+  Future<List<Map<String, dynamic>>> getQueuedCalls() async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/calls/queued/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body) as List<dynamic>;
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    }
+
+    throw ApiClientException(
+      'Unable to load queued calls: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Accept a queued call (counsellors only)
+  Future<Map<String, dynamic>> acceptCall(int callId) async {
+    final response = await _sendAuthorized(
+      (access) => http.patch(
+        Uri.parse('$base/calls/$callId/accept/'),
+        headers: _headers(access, {'Content-Type': 'application/json'}),
+        body: jsonEncode({}),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to accept call: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// End a call
+  Future<Map<String, dynamic>> endCall(int callId) async {
+    final response = await _sendAuthorized(
+      (access) => http.post(
+        Uri.parse('$base/calls/$callId/end/'),
+        headers: _headers(access, {'Content-Type': 'application/json'}),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to end call: ${_extractErrorMessage(response)}',
+    );
+  }
+
+  /// Get call details
+  Future<Map<String, dynamic>> getCall(int callId) async {
+    final response = await _sendAuthorized(
+      (access) => http.get(
+        Uri.parse('$base/calls/$callId/'),
+        headers: _headers(access),
+      ),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw ApiClientException(
+      'Unable to load call: ${_extractErrorMessage(response)}',
+    );
+  }
+
   // WebSocket connection for real-time chat
   Future<WebSocketChannel> connectChatWebSocket(int chatId) async {
+    return _connectWebSocket('chat', chatId);
+  }
+
+  // WebSocket connection for WebRTC signaling
+  Future<WebSocketChannel> connectWebRTCWebSocket(int callId) async {
+    return _connectWebSocket('webrtc', callId);
+  }
+
+  // Internal method to connect to WebSocket
+  Future<WebSocketChannel> _connectWebSocket(String type, int id) async {
     // Get access token for authentication
     final accessToken = await _accessToken;
     if (accessToken == null) {
@@ -2673,14 +2943,14 @@ class ApiClient {
       httpBase = httpBase.substring(7); // Remove 'http://'
     }
     
-    // Construct WebSocket URL with proper path (ensure trailing slash matches server route)
-    final wsPath = '/ws/chat/$chatId/'; // Match server route exactly
+    // Construct WebSocket URL with proper path
+    final wsPath = '/ws/$type/$id/'; // Match server route exactly
     final wsUrl = '$wsScheme$httpBase$wsPath?token=${Uri.encodeComponent(accessToken)}';
     
     // Log the exact URI for debugging
     if (kDebugMode) {
       print('[WebSocket] Connecting to: $wsUrl');
-      print('[WebSocket] Chat ID: $chatId');
+      print('[WebSocket] Type: $type, ID: $id');
       print('[WebSocket] Scheme: $wsScheme');
     }
     

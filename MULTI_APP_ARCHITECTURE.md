@@ -1,6 +1,11 @@
 # 🏗️ Multi-App Architecture & Deployment Guide
 
+> **Quick Start:** For getting started, see [COMPLETE_GUIDE.md](../COMPLETE_GUIDE.md)  
+> **Technical Docs:** For code architecture, see [PROJECT_DOCUMENTATION.md](../PROJECT_DOCUMENTATION.md)
+
 ## Complete Guide to Building and Deploying Multiple Flutter Apps from a Single Repository
+
+This is a comprehensive reference guide for multi-app architecture patterns, CI/CD setup, deployment strategies, and version management.
 
 ---
 
