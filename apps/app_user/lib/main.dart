@@ -15,9 +15,14 @@ void main() async {
   
   // Auto-detect backend port on startup
   try {
-    await ApiClient.detectBackendPort();
+    final detectedUrl = await ApiClient.detectBackendPort();
+    appLogger.info('Backend URL initialized: ${ApiClient.base}');
+    if (detectedUrl != ApiClient.base) {
+      appLogger.warning('URL mismatch: detected=$detectedUrl, using=${ApiClient.base}');
+    }
   } catch (e) {
     appLogger.debug('Port detection failed, using default: $e');
+    appLogger.info('Using default backend URL: ${ApiClient.base}');
   }
   
   runApp(const MyApp());

@@ -213,8 +213,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       await _webrtcManager!.dispose();
     }
     
-    await _localRenderer?.dispose();
-    await _remoteRenderer?.dispose();
+    // Don't dispose renderers here - let dispose() handle it
+    // The WebRTC manager already disposes renderers it owns
+    // This prevents double-dispose errors
     
     if (mounted) {
       Navigator.pop(context);
@@ -224,9 +225,32 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   @override
   void dispose() {
     _callTimer?.cancel();
+    
+    // Dispose WebRTC manager first (which will dispose renderers if it owns them)
     _webrtcManager?.dispose();
-    _localRenderer?.dispose();
-    _remoteRenderer?.dispose();
+    
+    // Only dispose renderers if they weren't already disposed by manager
+    // Use try-catch to handle already-disposed errors gracefully
+    if (_localRenderer != null) {
+      try {
+        _localRenderer!.dispose();
+      } catch (e) {
+        // Already disposed, ignore
+        print('[Video Call] Local renderer already disposed: $e');
+      }
+      _localRenderer = null;
+    }
+    
+    if (_remoteRenderer != null) {
+      try {
+        _remoteRenderer!.dispose();
+      } catch (e) {
+        // Already disposed, ignore
+        print('[Video Call] Remote renderer already disposed: $e');
+      }
+      _remoteRenderer = null;
+    }
+    
     super.dispose();
   }
 

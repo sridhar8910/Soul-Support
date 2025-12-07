@@ -34,7 +34,7 @@
 
 param(
     [switch]$Release,
-    [ValidateSet('windows', 'chrome', 'edge', 'web-server', 'android')]
+    # Allow device IDs (like emulator-5554) in addition to preset device names
     [string]$Device = 'windows'
 )
 
@@ -612,12 +612,258 @@ $script:flutterErrorLogFile = Join-Path $logsDir "flutter_error.log"
 
 Push-Location $flutterPath
 try {
-    $flutterArgs = @('run', '-d', $Device)
+    # Handle device parameter
+    $targetDevice = $Device
+    
+    # If device is "android", detect available Android emulators
+    if ($Device -eq 'android') {
+        Write-Host "Detecting Android devices..." -ForegroundColor Cyan
+        
+        # Try JSON format first (more reliable)
+        $androidDeviceId = $null
+        $devicesOutput = & $flutterCmd devices --machine 2>&1 | Out-String
+        $devicesJson = $devicesOutput | ConvertFrom-Json -ErrorAction SilentlyContinue
+        
+        if ($devicesJson -and $devicesJson.devices) {
+            # Look for Android devices
+            $androidDevices = $devicesJson.devices | Where-Object { 
+                $_.targetPlatform -like 'android-*' -or 
+                ($_.category -eq 'mobile' -and ($_.id -like 'emulator-*' -or $_.name -match 'android'))
+            }
+            
+            if ($androidDevices -and $androidDevices.Count -gt 0) {
+                $androidDeviceId = $androidDevices[0].id
+                $androidDeviceName = $androidDevices[0].name
+            }
+        }
+        
+        # Fallback: parse human-readable output
+        if (-not $androidDeviceId) {
+            $devicesList = & $flutterCmd devices 2>&1 | Where-Object { $_ -is [string] }
+            # Look for lines with emulator IDs or Android devices
+            # Format: "name • deviceId • platform • version"
+            foreach ($line in $devicesList) {
+                # Skip header lines and empty lines
+                if ($line -match '^$|^Flutter|^The following|^No supported') {
+                    continue
+                }
+                
+                # Check if line contains bullet points (device list format)
+                if ($line -match '•') {
+                    $parts = $line -split '•' | ForEach-Object { $_.Trim() }
+                    if ($parts.Count -ge 2) {
+                        $potentialDeviceId = $parts[1].Trim()
+                        
+                        # Check if this is an emulator ID
+                        if ($potentialDeviceId -match '^emulator-\d+$') {
+                            $androidDeviceId = $potentialDeviceId
+                            $androidDeviceName = $parts[0].Trim()
+                            break
+                        }
+                        # Check if line mentions Android and we have a device ID
+                        elseif ($line -match 'android' -and $potentialDeviceId -match '^[a-zA-Z0-9_-]+$') {
+                            $androidDeviceId = $potentialDeviceId
+                            $androidDeviceName = $parts[0].Trim()
+                            break
+                        }
+                    }
+                } else {
+                    # Also check for standalone emulator pattern
+                    if ($line -match '\b(emulator-\d+)\b') {
+                        $androidDeviceId = $matches[1]
+                        break
+                    }
+                }
+            }
+        }
+        
+        if ($androidDeviceId) {
+            $targetDevice = $androidDeviceId
+            if ($androidDeviceName) {
+                Write-Host "Found Android device: $androidDeviceName ($targetDevice)" -ForegroundColor Green
+            } else {
+                Write-Host "Found Android emulator: $targetDevice" -ForegroundColor Green
+            }
+        } else {
+            # No Android device found - try to launch an emulator automatically
+            Write-Host "No Android devices found. Checking for available emulators..." -ForegroundColor Yellow
+            
+            # Get list of available emulators
+            $emulatorsOutput = & $flutterCmd emulators 2>&1 | Out-String
+            $emulatorLines = $emulatorsOutput -split "`n" | Where-Object { $_ -match '^\s+\w+' -and $_ -notmatch 'Available' -and $_ -notmatch 'No emulators' }
+            
+            if ($emulatorLines -and $emulatorLines.Count -gt 0) {
+                # Extract emulator ID from the first available emulator
+                # Format is usually something like "  Medium_Phone    • medium_phone    • Google APIs • 33"
+                $firstEmulator = $emulatorLines[0].Trim()
+                $emulatorParts = $firstEmulator -split '\s+•\s+' | ForEach-Object { $_.Trim() }
+                
+                if ($emulatorParts -and $emulatorParts.Count -ge 2) {
+                    $emulatorId = $emulatorParts[1]  # Second part is usually the ID
+                    $emulatorName = $emulatorParts[0]  # First part is the display name
+                    
+                    Write-Host "Found emulator: $emulatorName" -ForegroundColor Cyan
+                    Write-Host "Launching emulator '$emulatorId'..." -ForegroundColor Cyan
+                    
+                    # Launch the emulator in the background
+                    Start-Process -FilePath $flutterCmd -ArgumentList @("emulators", "--launch", $emulatorId) -NoNewWindow | Out-Null
+                    
+                    # Wait for emulator to appear (check every 3 seconds, timeout after 120 seconds)
+                    Write-Host "Waiting for emulator to start..." -ForegroundColor Yellow
+                    $timeout = 120
+                    $elapsed = 0
+                    $deviceReady = $false
+                    
+                    while ($elapsed -lt $timeout) {
+                        Start-Sleep -Seconds 3
+                        $elapsed += 3
+                        
+                        # Check if device is now available
+                        $devicesOutput = & $flutterCmd devices --machine 2>&1 | Out-String
+                        $devicesJson = $devicesOutput | ConvertFrom-Json -ErrorAction SilentlyContinue
+                        
+                        if ($devicesJson -and $devicesJson.devices) {
+                            $androidDevices = $devicesJson.devices | Where-Object { 
+                                $_.targetPlatform -like 'android-*' -or 
+                                ($_.category -eq 'mobile' -and ($_.id -like 'emulator-*' -or $_.name -match 'android'))
+                            }
+                            
+                            if ($androidDevices -and $androidDevices.Count -gt 0) {
+                                $androidDeviceId = $androidDevices[0].id
+                                $androidDeviceName = $androidDevices[0].name
+                                $deviceReady = $true
+                                break
+                            }
+                        }
+                        
+                        # Also check human-readable output as fallback
+                        $devicesList = & $flutterCmd devices 2>&1 | Where-Object { $_ -is [string] }
+                        foreach ($line in $devicesList) {
+                            if ($line -match 'emulator-\d+') {
+                                $androidDeviceId = $matches[0]
+                                $deviceReady = $true
+                                break
+                            }
+                        }
+                        
+                        if ($deviceReady) { break }
+                        
+                        # Show progress every 15 seconds
+                        if ($elapsed % 15 -eq 0) {
+                            Write-Host "  Still waiting... ($elapsed/$timeout seconds)" -ForegroundColor Gray
+                        }
+                    }
+                    
+                    if ($deviceReady -and $androidDeviceId) {
+                        $targetDevice = $androidDeviceId
+                        Write-Host "Emulator started successfully: $targetDevice" -ForegroundColor Green
+                    } else {
+                        Write-Error "Emulator launch timed out after $timeout seconds. Please start manually or check emulator status."
+                        Write-Host "`nAvailable devices:" -ForegroundColor Yellow
+                        & $flutterCmd devices
+                        Write-Host "`nTo start an emulator manually:" -ForegroundColor Yellow
+                        Write-Host "  flutter emulators --launch <emulator_id>" -ForegroundColor Cyan
+                        Write-Host "  Or use .\run_android.ps1 -Release for automatic emulator launch" -ForegroundColor Cyan
+                        exit 1
+                    }
+                } else {
+                    Write-Error "Could not parse emulator information. Available emulators:"
+                    Write-Host $emulatorsOutput
+                    Write-Host "`nTo start an emulator manually:" -ForegroundColor Yellow
+                    Write-Host "  flutter emulators --launch <emulator_id>" -ForegroundColor Cyan
+                    Write-Host "  Or use .\run_android.ps1 -Release for automatic emulator launch" -ForegroundColor Cyan
+                    exit 1
+                }
+            } else {
+                Write-Error "No Android devices found and no emulators available."
+                Write-Host "`nAvailable devices:" -ForegroundColor Yellow
+                & $flutterCmd devices
+                Write-Host "`nTo set up an emulator:" -ForegroundColor Yellow
+                Write-Host "  1. Open Android Studio" -ForegroundColor Cyan
+                Write-Host "  2. Go to Tools > Device Manager" -ForegroundColor Cyan
+                Write-Host "  3. Create a new virtual device" -ForegroundColor Cyan
+                Write-Host "`nOr use .\run_android.ps1 -Release for automatic emulator launch" -ForegroundColor Cyan
+                exit 1
+            }
+        }
+    } elseif ($Device -match '^emulator-\d+$' -or $Device -match '^[a-zA-Z0-9_-]+$') {
+        # User provided a specific device ID (like emulator-5554 or other device IDs)
+        Write-Host "Checking device: $Device..." -ForegroundColor Cyan
+        
+        # For emulator IDs, check both running devices and available emulators
+        $deviceFound = $false
+        $isEmulator = $Device -match '^emulator-\d+$'
+        
+        # First check running devices
+        $devicesOutput = & $flutterCmd devices 2>&1 | Where-Object { $_ -is [string] }
+        foreach ($line in $devicesOutput) {
+            if ($line -match '•') {
+                $parts = $line -split '•' | ForEach-Object { $_.Trim() }
+                if ($parts.Count -ge 2 -and $parts[1] -eq $Device) {
+                    $deviceFound = $true
+                    Write-Host "Found running device: $($parts[0]) ($Device)" -ForegroundColor Green
+                    break
+                }
+            } elseif ($line -match $Device) {
+                $deviceFound = $true
+                break
+            }
+        }
+        
+        # If not found and it's an emulator, check available emulators (might not be running)
+        if (-not $deviceFound -and $isEmulator) {
+            Write-Host "Emulator not currently running. Checking available emulators..." -ForegroundColor Yellow
+            $emulatorsOutput = & $flutterCmd emulators 2>&1 | Where-Object { $_ -is [string] }
+            
+            # Check if emulator exists in the list (even if not running)
+            # Also extract emulator name/ID from the output format
+            $emulatorIdPattern = $Device -replace '-', '.*'  # Allow flexible matching
+            foreach ($line in $emulatorsOutput) {
+                # Match the device ID in the emulator list
+                if ($line -match $Device -or $line -match $emulatorIdPattern) {
+                    Write-Host "Emulator '$Device' is available but not currently running." -ForegroundColor Yellow
+                    Write-Host "Proceeding - Flutter will attempt to connect. If it fails, start the emulator with:" -ForegroundColor Yellow
+                    Write-Host "  flutter emulators --launch <emulator_name>" -ForegroundColor Cyan
+                    Write-Host "  Or start from Android Studio" -ForegroundColor Cyan
+                    $deviceFound = $true  # Allow it to proceed - Flutter will handle if truly unavailable
+                    break
+                }
+            }
+            
+            # For emulator IDs, be lenient - let Flutter handle the error if it doesn't exist
+            if (-not $deviceFound) {
+                Write-Warning "Emulator '$Device' not found in available devices or emulators."
+                Write-Host "However, proceeding anyway - Flutter will validate and report errors if needed." -ForegroundColor Yellow
+                $deviceFound = $true  # Allow it to proceed
+            }
+        }
+        
+        # For non-emulator device IDs, require validation
+        if (-not $deviceFound -and -not $isEmulator) {
+            Write-Warning "Device '$Device' not found in available devices."
+            Write-Host "`nAvailable devices:" -ForegroundColor Yellow
+            & $flutterCmd devices
+            Write-Host "`nNote: You can also use device IDs like 'windows', 'chrome', 'edge', or 'android' to auto-detect." -ForegroundColor Cyan
+            exit 1
+        }
+        
+        $targetDevice = $Device
+    }
+    
+    $flutterArgs = @('run', '-d', $targetDevice)
     if ($Release) {
         $flutterArgs += '--release'
     }
     
-    Write-Host "Starting Flutter app on $Device..." -ForegroundColor Cyan
+    # For Android emulator, inject backend URL using 10.0.2.2 (emulator's special IP for host)
+    if ($targetDevice -match '^emulator-\d+$') {
+        $androidBackendUrl = "http://10.0.2.2:$backendPort/api"
+        $flutterArgs += "--dart-define=BACKEND_BASE_URL=$androidBackendUrl"
+        Write-Host "Backend URL for Android emulator: $androidBackendUrl" -ForegroundColor Green
+        Write-Host "Note: App will be rebuilt with this URL" -ForegroundColor Gray
+    }
+    
+    Write-Host "Starting Flutter app on $targetDevice..." -ForegroundColor Cyan
     
     # Run Flutter directly - this blocks and shows output in this terminal
     # Backend logs are being displayed in real-time via the runspace (running in parallel)

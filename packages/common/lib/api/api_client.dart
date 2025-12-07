@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -977,22 +977,48 @@ class ApiClient {
   static String? _detectedBase;
   static bool _isDetecting = false;
   
+  // Check for dart-define at compile time (cached for performance)
+  static final String? _dartDefineBaseUrl = () {
+    try {
+      final envBase = const String.fromEnvironment('BACKEND_BASE_URL');
+      if (envBase.isNotEmpty && envBase != '') {
+        return envBase;
+      }
+    } catch (_) {
+      // Ignore errors during initialization
+    }
+    return null;
+  }();
+  
   // Common ports to try for auto-detection (matches run_counsellor.ps1)
   static const List<int> _commonPorts = [8000, 8080, 9001, 8001, 8002, 8003];
   
   static String get base {
-    // If explicitly set via environment variable, use it
-    final envBase = const String.fromEnvironment('BACKEND_BASE_URL');
-    if (envBase.isNotEmpty && envBase != '') {
-      return envBase;
+    // Priority 1: dart-define (highest priority)
+    if (_dartDefineBaseUrl != null && _dartDefineBaseUrl!.isNotEmpty) {
+      return _dartDefineBaseUrl!;
     }
     
-    // Return detected base or default
-    return _detectedBase ?? _defaultBase;
+    // Priority 2: Runtime detected base
+    if (_detectedBase != null) {
+      return _detectedBase!;
+    }
+    
+    // Priority 3: Default fallback
+    return _defaultBase;
   }
   
   /// Auto-detect backend port by trying common ports
   static Future<String> detectBackendPort() async {
+    // Priority 1: dart-define (highest priority, no detection needed)
+    if (_dartDefineBaseUrl != null && _dartDefineBaseUrl!.isNotEmpty) {
+      if (_detectedBase != _dartDefineBaseUrl) {
+        _detectedBase = _dartDefineBaseUrl;
+        print('[API] ✅ Using backend URL from dart-define: $_dartDefineBaseUrl');
+      }
+      return _dartDefineBaseUrl!;
+    }
+    
     // If already detecting, wait for it
     while (_isDetecting) {
       await Future.delayed(const Duration(milliseconds: 100));
@@ -1006,9 +1032,21 @@ class ApiClient {
     _isDetecting = true;
     
     try {
-      // Try each port in parallel for faster detection
-      final futures = _commonPorts.map((port) async {
-        final baseUrl = 'http://127.0.0.1:$port/api';
+      // On Android, also try 10.0.2.2 (emulator's special IP for host)
+      final hosts = <String>['127.0.0.1'];
+      try {
+        if (defaultTargetPlatform == TargetPlatform.android) {
+          hosts.add('10.0.2.2');
+          print('[API] 🔍 Android detected - also trying 10.0.2.2 for emulator');
+        }
+      } catch (_) {
+        // Platform check might fail in some contexts, continue with 127.0.0.1
+      }
+      
+      // Try each host and port combination
+      final futures = hosts.expand((host) => 
+        _commonPorts.map((port) async {
+          final baseUrl = 'http://$host:$port/api';
         
         // Method 1: Try health endpoint first
         try {
@@ -1073,7 +1111,8 @@ class ApiClient {
         }
         
         return null;
-      });
+        })
+      );
       
       final results = await Future.wait(futures);
       final detected = results.firstWhere((result) => result != null, orElse: () => null);
@@ -1098,6 +1137,15 @@ class ApiClient {
   
   /// Ensure port detection has completed before making API calls
   static Future<void> _ensurePortDetected() async {
+    // If dart-define is set, use it immediately (no detection needed)
+    if (_dartDefineBaseUrl != null && _dartDefineBaseUrl!.isNotEmpty) {
+      if (_detectedBase != _dartDefineBaseUrl) {
+        _detectedBase = _dartDefineBaseUrl;
+        print('[API] ✅ Using backend URL from dart-define: $_dartDefineBaseUrl');
+      }
+      return;
+    }
+    
     // If not detected and not currently detecting, start detection
     if (_detectedBase == null && !_isDetecting) {
       print('[API] 🔍 Port not detected yet, starting detection...');
@@ -1113,6 +1161,8 @@ class ApiClient {
     // Port already detected - log for debugging
     if (_detectedBase != null) {
       print('[API] ✅ Using detected backend: $_detectedBase');
+    } else {
+      print('[API] ⚠️ Using default backend: $_defaultBase');
     }
   }
   
